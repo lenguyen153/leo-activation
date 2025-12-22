@@ -45,7 +45,7 @@ class FunctionGemmaEngine(BaseLLMEngine):
             trust_remote_code=True
         ).eval()
 
-    def extract_tool_calls(self, text: str):
+    def extract_tool_calls(self, text: str) -> list[dict]:
         """
         Parses FunctionGemma's specific output format:
         <start_function_call>call:func_name{param:<escape>value<escape>}<end_function_call>

@@ -157,26 +157,14 @@ async def chat_endpoint(request: ChatRequest):
         # ====================================================
         # 1. TOOL INTENT DETECTION (Gemma only)
         # ====================================================
-        raw_output = tool_engine.generate(messages, TOOLS)
-        logger.info(f"raw_output \n {raw_output} \n ")
-        
-        tool_calls = tool_engine.extract_tool_calls(raw_output) or []
-
+        raw_output = llm_router.generate(messages, TOOLS)
+        tool_calls = llm_router.extract_tool_calls(raw_output) or []
         debug_calls: List[ToolCallDebug] = []
         debug_results: List[ToolResultDebug] = []
 
+      
         # ====================================================
-        # 2. NO TOOLS → SEMANTIC ANSWER (Router decides)
-        # ====================================================
-        if not tool_calls:
-            answer = llm_router.generate(messages, TOOLS)
-            return ChatResponse(
-                answer=answer,
-                debug=DebugInfo(calls=[], data=[]),
-            )
-
-        # ====================================================
-        # 3. EXECUTE TOOLS
+        # 2. EXECUTE TOOLS
         # ====================================================
         logger.info(f"Executing {len(tool_calls)} tool(s)")
 
@@ -194,7 +182,7 @@ async def chat_endpoint(request: ChatRequest):
         for call in tool_calls:
             name = call["name"]
             args = call.get("arguments", {})
-
+            
             debug_calls.append(ToolCallDebug(name=name, arguments=args))
 
             if name not in AVAILABLE_TOOLS:
@@ -219,7 +207,7 @@ async def chat_endpoint(request: ChatRequest):
         messages.extend(tool_outputs_for_llm)
 
         # ====================================================
-        # 4. FINAL SYNTHESIS (Gemini preferred)
+        # 3. FINAL SYNTHESIS (Gemini preferred)
         # ====================================================
         final_answer = llm_router.generate(messages, TOOLS)
 
