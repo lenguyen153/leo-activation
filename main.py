@@ -1,9 +1,15 @@
+import time
 import json
 import logging
 from typing import Any, Dict, List
 
+from pathlib import Path
+
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -47,12 +53,34 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+# === Static & Template Setup ===
+# --- File Paths ---
+BASE_DIR = Path(__file__).resolve().parent
+RESOURCES_DIR = BASE_DIR / "agentic_resources"
+TEMPLATES_DIR = RESOURCES_DIR / "templates"
+
+app.mount("/resources", StaticFiles(directory=RESOURCES_DIR), name="resources")
+app.state.templates = Jinja2Templates(directory=TEMPLATES_DIR)
+
+# === Core UI Routes ===
+@app.get("/", response_class=HTMLResponse)
+async def index(request: Request):
+    """
+    Root index page for the chatbot demo.
+    Loads from Jinja2 template (index.html).
+    """
+    ts = int(time.time())
+    data = {"request": request, "timestamp": ts}
+    templates = request.app.state.templates
+    return templates.TemplateResponse("test.html", data)
+
 # ============================================================
 # Engine Initialization
 # ============================================================
 
 # Router decides which model to use
-router = LLMRouter(mode="auto")
+llm_router = LLMRouter(mode="auto")
 
 # We still need Gemma directly for tool-call extraction
 tool_engine = FunctionGemmaEngine()
@@ -90,6 +118,8 @@ class DebugInfo(BaseModel):
 class ChatResponse(BaseModel):
     answer: str
     debug: DebugInfo
+
+
 
 # ============================================================
 # Chat Endpoint
@@ -137,7 +167,7 @@ async def chat_endpoint(request: ChatRequest):
         # 2. NO TOOLS → SEMANTIC ANSWER (Router decides)
         # ====================================================
         if not tool_calls:
-            answer = router.generate(messages)
+            answer = llm_router.generate(messages)
             return ChatResponse(
                 answer=answer,
                 debug=DebugInfo(calls=[], data=[]),
@@ -189,7 +219,7 @@ async def chat_endpoint(request: ChatRequest):
         # ====================================================
         # 4. FINAL SYNTHESIS (Gemini preferred)
         # ====================================================
-        final_answer = router.generate(messages)
+        final_answer = llm_router.generate(messages)
 
         return ChatResponse(
             answer=final_answer,
