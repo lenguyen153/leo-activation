@@ -116,6 +116,47 @@ LEO_CDP_API_URL=http://your-leo-cdp-instance:8080
 
 ```
 
+### main_configs.py & sample configuration
+
+This project centralizes environment-based configuration in `main_configs.py` (a thin wrapper that reads environment variables). Add the following environment variables to control LLM models and marketing integrations. Copy the sample below to a `.env` file or set them in your environment.
+
+```text
+# Model configuration
+GEMINI_MODEL_ID=gemini-2.5-flash-lite
+GEMINI_API_KEY=your_gemini_api_key
+
+# SendGrid / SMTP (Email)
+EMAIL_PROVIDER=smtp            # or 'sendgrid'
+SENDGRID_API_KEY=your_sendgrid_api_key
+SENDGRID_FROM=no-reply@yourdomain.com
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USERNAME=you@yourdomain.com
+SMTP_PASSWORD=your_smtp_password_or_app_password
+SMTP_USE_TLS=1
+
+# Zalo OA
+ZALO_OA_TOKEN=your_zalo_token
+ZALO_OA_API_URL=https://openapi.zalo.me/v3.0/oa/message/cs
+ZALO_OA_MAX_RETRIES=2
+
+# Facebook Page
+FB_PAGE_ACCESS_TOKEN=your_facebook_page_token
+FB_PAGE_ID=your_facebook_page_id
+
+# Optional helpers
+HF_TOKEN=your_huggingface_token
+LEO_CDP_API_URL=http://your-leo-cdp-instance:8080
+
+```
+
+Notes:
+- `main_configs.py` reads these variables at import time and exposes them as constants/classes used across the app.
+- The env var `GEMINI_MODEL_ID` is read into the code as `GEMINI_MODEL_ID` in `main_configs.py` (used by the Gemini engine).
+- Some tests under `test-api/` (e.g. `test-api/simple_test.py`) perform live HTTP requests and may fail when external endpoints are unavailable; consider mocking these in CI or skipping network-dependent tests.
+- For Gmail SMTP, prefer an app-specific password or OAuth; do not commit secrets to the repository.
+- You can override provider-specific options at runtime by passing kwargs to `activate_channel` (e.g. `activate_channel("email", "user@example.com", "Hello", provider="sendgrid", retries=1)`).
+
 ## 🚀 Running the Platform
 
 Launch the FastAPI server:
@@ -146,6 +187,7 @@ Below is the current repository layout with brief descriptions of the primary fi
 
 * **Top-level files**
   * `main.py` — FastAPI orchestrator implementing the FunctionGemma cycle and HTTP endpoints.
+  * `main_configs.py` — centralized, environment-driven configuration used across the app.
   * `README.md` — This documentation.
   * `requirements.txt` — Python dependencies.
 

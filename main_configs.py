@@ -65,7 +65,7 @@ class MarketingConfigs:
 # ============================================================
 # Gemini LLM Configurations
 # ============================================================
-GEMINI_MODEL_ID = os.getenv("DEFAULT_MODEL_ID", "gemini-2.5-flash-lite")
+GEMINI_MODEL_ID = os.getenv("GEMINI_MODEL_ID", "gemini-2.5-flash-lite")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 # ============================================================
