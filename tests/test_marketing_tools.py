@@ -91,3 +91,26 @@ def test_facebook_push_alias(monkeypatch):
     res = mt.activate_channel("facebook_push", "Summer Sale Target", "Hello, this is our products")
     assert res["status"] == "success"
     assert res["channel"] == "facebook_page"
+
+
+def test_zalo_oa_variants(monkeypatch):
+    # Ensure spaced/hyphenated/compact variants are accepted
+    monkeypatch.setenv("ZALO_OA_TOKEN", "fake-token")
+
+    class FakeResp:
+        def __init__(self):
+            self.status_code = 200
+        def raise_for_status(self):
+            return None
+        def json(self):
+            return {"ok": True}
+
+    def fake_post(url, json, headers, timeout):
+        return FakeResp()
+
+    monkeypatch.setattr("requests.post", fake_post)
+
+    for variant in ("Zalo OA", "zalo-oa", "ZaloOA", "zalooa", "zalo oa"):
+        res = mt.activate_channel(variant, "Summer Sale Target", "Hello, this is our products")
+        assert res["status"] == "success"
+        assert res["channel"] == "zalo_oa"
