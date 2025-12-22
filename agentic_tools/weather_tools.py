@@ -1,54 +1,198 @@
 import logging
 import requests
-from typing import Dict, Any, Optional
+import re
+import unicodedata
+from typing import Dict, Any, Optional, List
 
-# Configure logging
+# ============================================================
+# Logging
+# ============================================================
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger("Agent-Weather")
 
-def get_coordinates(city_name: str) -> Optional[Dict[str, float]]:
+# ============================================================
+# Canonical aliases
+# ============================================================
+CITY_ALIASES = {
+    "saigon": "ho chi minh city",
+    "hcm": "ho chi minh city",
+    "hcmc": "ho chi minh city",
+    "tphcm": "ho chi minh city",
+    "danang": "da nang",
+    "hn": "hanoi",
+    "ha noi": "hanoi"
+}
+
+VIETNAM_KEYWORDS = {"viet", "vietnam", "vn", "tphcm", "hcm", "saigon", "hanoi", "danang"}
+
+# ============================================================
+# Normalization helpers
+# ============================================================
+def normalize_text(text: str) -> str:
     """
-    Resolves a city name to latitude/longitude using Open-Meteo Geocoding API.
+    Normalize text for geocoding.
+
+    Steps:
+    - Lowercase
+    - Vietnamese-specific letter normalization (đ → d)
+    - Unicode NFKD normalization
+    - Remove diacritics
+    - Remove punctuation
+    - Collapse whitespace
     """
-    try:
-        # Open-Meteo Geocoding API (Free, no key required)
-        geo_url = "https://geocoding-api.open-meteo.com/v1/search"
-        params = {
-            "name": city_name,
-            "count": 1,       # We only need the top match
-            "language": "en",
-            "format": "json"
-        }
-        
-        response = requests.get(geo_url, params=params, timeout=5)
-        response.raise_for_status()
-        data = response.json()
+    text = text.strip().lower()
 
-        if not data.get("results"):
-            logger.warning(f"Geolocation failed: No results found for '{city_name}'")
-            return None
+    # 🔴 CRITICAL: Vietnamese-specific normalization
+    text = text.replace("đ", "d").replace("Đ", "d")
 
-        # Return the top match
-        result = data["results"][0]
-        logger.info(f"Geolocated '{city_name}' to {result['name']}, {result.get('country')} ({result['latitude']}, {result['longitude']})")
-        
-        return {
-            "lat": result["latitude"],
-            "lon": result["longitude"],
-            "name": result["name"],
-            "country": result.get("country", "")
-        }
+    text = unicodedata.normalize("NFKD", text)
+    text = "".join(c for c in text if not unicodedata.combining(c))
+    text = re.sub(r"[^\w\s]", " ", text)
+    text = re.sub(r"\s+", " ", text)
 
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Geocoding network error: {e}")
+    return text.strip()
+
+
+
+def canonicalize_city_name(raw: str) -> str:
+    """
+    Convert a city name to its canonical form using alias mapping.
+
+    Args:
+        raw: Original user-provided city name.
+
+    Returns:
+        Canonical city name suitable for geocoding.
+    """
+    normalized = normalize_text(raw)
+    return CITY_ALIASES.get(normalized, normalized)
+
+
+def looks_vietnamese(text: str) -> bool:
+    """
+    Heuristically detect whether a location is likely in Vietnam.
+
+    Args:
+        text: User-provided location string.
+
+    Returns:
+        True if Vietnamese indicators are detected, else False.
+    """
+    t = normalize_text(text)
+    return any(k in t for k in VIETNAM_KEYWORDS)
+
+# ============================================================
+# Geocoding
+# ============================================================
+def get_coordinates(city_name: str) -> Optional[Dict[str, Any]]:
+    """
+    Resolve a city name to geographic coordinates.
+
+    This function applies multiple accuracy strategies:
+    - Unicode normalization and alias resolution
+    - Language fallback (vi → en)
+    - Country bias (Vietnam when detected)
+    - Candidate ranking instead of first-hit selection
+
+    Args:
+        city_name: City or location name provided by the user.
+
+    Returns:
+        Dictionary containing latitude, longitude, resolved name, and country
+        if successful; otherwise None.
+    """
+    geo_url = "https://geocoding-api.open-meteo.com/v1/search"
+
+    canonical = canonicalize_city_name(city_name)
+    country_bias = "VN" if looks_vietnamese(city_name) else None
+
+    attempts = [
+        {"name": city_name, "language": "en"},
+        {"name": city_name, "language": "vi"},
+        {"name": canonical, "language": "vi"},
+        {"name": canonical, "language": "en"},
+    ]
+
+    seen = set()
+    candidates: List[Dict[str, Any]] = []
+
+    for attempt in attempts:
+        key = (attempt["name"], attempt["language"])
+        if key in seen:
+            continue
+        seen.add(key)
+
+        try:
+            params = {
+                "name": attempt["name"],
+                "count": 5,
+                "language": attempt["language"],
+                "format": "json"
+            }
+            resp = requests.get(geo_url, params=params, timeout=5)
+            resp.raise_for_status()
+            data = resp.json()
+
+            for r in data.get("results", []):
+                score = 0
+
+                if country_bias and r.get("country_code") == country_bias:
+                    score += 3
+
+                population = r.get("population") or 0
+                if population > 1_000_000:
+                    score += 2
+                elif population > 100_000:
+                    score += 1
+
+                resolved = normalize_text(r.get("name", ""))
+                if resolved == canonical:
+                    score += 3
+                elif canonical in resolved:
+                    score += 1
+
+                candidates.append({
+                    "score": score,
+                    "lat": r["latitude"],
+                    "lon": r["longitude"],
+                    "name": r["name"],
+                    "country": r.get("country", ""),
+                    "country_code": r.get("country_code", "")
+                })
+
+        except requests.RequestException as e:
+            logger.warning(f"Geocoding error for {attempt}: {e}")
+
+    if not candidates:
+        logger.warning(f"Geolocation failed for '{city_name}'")
         return None
 
+    candidates.sort(key=lambda x: x["score"], reverse=True)
+    best = candidates[0]
+
+    logger.info(
+        f"Geolocated '{city_name}' → {best['name']}, {best['country']} "
+        f"({best['lat']}, {best['lon']}) score={best['score']}"
+    )
+
+    return best
+
+# ============================================================
+# Weather helpers
+# ============================================================
 def get_weather_description(code: int) -> str:
-    """Helper to convert WMO weather codes to text."""
-    # Simplified WMO code mapping
+    """
+    Convert WMO weather codes into human-readable descriptions.
+
+    Args:
+        code: Integer weather code from Open-Meteo.
+
+    Returns:
+        Textual description of the weather condition.
+    """
     wmo_codes = {
         0: "Clear sky",
         1: "Mainly clear", 2: "Partly cloudy", 3: "Overcast",
@@ -60,45 +204,50 @@ def get_weather_description(code: int) -> str:
     }
     return wmo_codes.get(code, "Unknown")
 
+# ============================================================
+# Public tool function (REQUIRES DOCSTRING)
+# ============================================================
 def get_current_weather(location: str, unit: str = "celsius") -> Dict[str, Any]:
     """
-    Get real-time weather by automatically geocoding the location name.
+    Get the current weather for a city or location name.
+
+    The function automatically:
+    - Normalizes and resolves the location name
+    - Converts it into latitude and longitude
+    - Fetches real-time weather data from Open-Meteo
 
     Args:
-        location: The city name (e.g., 'Saigon', 'Paris').
-        unit: 'celsius' or 'fahrenheit'.
+        location: City or place name (e.g., "Da Nang", "Paris", "HCMC").
+        unit: Temperature unit, either "celsius" or "fahrenheit".
+
+    Returns:
+        A structured dictionary containing:
+        - resolved location metadata
+        - current temperature, wind speed, and weather condition
+        - data source identifier
     """
     unit = unit.lower()
-    if unit not in ["celsius", "fahrenheit"]:
-        return {"status": "error", "message": "Invalid unit. Use 'celsius' or 'fahrenheit'."}
+    if unit not in {"celsius", "fahrenheit"}:
+        return {"status": "error", "message": "Invalid unit"}
 
-    # 1. Geocode the text to coordinates
     coords = get_coordinates(location)
     if not coords:
-        return {
-            "status": "error", 
-            "message": f"Could not find location: {location}"
-        }
+        return {"status": "error", "message": f"Location not found: {location}"}
 
-    # 2. Fetch Weather Data
     weather_url = "https://api.open-meteo.com/v1/forecast"
     params = {
         "latitude": coords["lat"],
         "longitude": coords["lon"],
         "current_weather": "true",
-        "temperature_unit": unit  # API handles unit conversion automatically
+        "temperature_unit": unit
     }
 
-    logger.info(f"Fetching weather for {coords['name']}...")
-
     try:
-        response = requests.get(weather_url, params=params, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-        
+        resp = requests.get(weather_url, params=params, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
         current = data.get("current_weather", {})
-        
-        # 3. Construct rich response
+
         return {
             "status": "success",
             "location": {
@@ -119,16 +268,6 @@ def get_current_weather(location: str, unit: str = "celsius") -> Dict[str, Any]:
             "source": "Open-Meteo"
         }
 
-    except requests.exceptions.RequestException as e:
+    except requests.RequestException as e:
         logger.error(f"Weather API error: {e}")
         return {"status": "error", "message": "Weather service unreachable"}
-    except Exception as e:
-        logger.error(f"Unexpected error: {e}")
-        return {"status": "error", "message": str(e)}
-
-# --- Usage Example ---
-if __name__ == "__main__":
-    # Test with a city not in your original list
-    result = get_current_weather("Da Nang", unit="celsius")
-    import json
-    print(json.dumps(result, indent=2))
