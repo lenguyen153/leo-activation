@@ -6,14 +6,13 @@ from google.genai import types
 from google.genai.errors import APIError
 from agentic_models.base import BaseLLMEngine
 
-# Configuration
-DEFAULT_MODEL_ID = os.getenv("DEFAULT_MODEL_ID", "gemini-2.5-flash-lite")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+# Configuration moved to main_configs.py
+from main_configs import GEMINI_MODEL_ID, GEMINI_API_KEY
 
 logger = logging.getLogger(__name__)
 
 class GeminiEngine(BaseLLMEngine):
-    def __init__(self, model_name: str = DEFAULT_MODEL_ID, api_key: str = GEMINI_API_KEY):
+    def __init__(self, model_name: str = GEMINI_MODEL_ID, api_key: str = GEMINI_API_KEY):
         if not model_name or not api_key:
             raise ValueError("Gemini API key or model name missing")
         

@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 # ============================================================
 # Domain Imports
 # ============================================================
-from agentic_models.router import AgentRouter
+from agentic_models.router import AgentRouter, build_messages
 
 from agentic_tools.tools import (
     AVAILABLE_TOOLS,
@@ -25,36 +25,38 @@ from agentic_tools.tools import (
     manage_leo_segment,
     activate_channel,
 )
+from main_configs import CORS_ALLOW_CREDENTIALS, CORS_ALLOW_HEADERS, CORS_ALLOW_METHODS, CORS_ALLOW_ORIGINS, MAIN_APP_DESCRIPTION, MAIN_APP_HOST, MAIN_APP_PORT, MAIN_APP_TITLE, MAIN_APP_VERSION
 
 # ============================================================
 # Logging Configuration
 # ============================================================
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("LeoCDPAgent")
+logger = logging.getLogger("LEO Activation API")
 
 # ============================================================
 # App Initialization
 # ============================================================
 app = FastAPI(
-    title="Resynap720 – LEO CDP API",
-    description="High-accuracy Agentic Interface for LEO CDP (Gemma + Gemini)",
-    version="1.2.0",
+    title=MAIN_APP_TITLE,
+    description=MAIN_APP_DESCRIPTION,
+    version=MAIN_APP_VERSION,
 )
 
 # ============================================================
-# CORS Configuration
+# CORS Middleware (config-driven)
 # ============================================================
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # tighten in prod
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=CORS_ALLOW_ORIGINS,
+    allow_credentials=CORS_ALLOW_CREDENTIALS,
+    allow_methods=CORS_ALLOW_METHODS,
+    allow_headers=CORS_ALLOW_HEADERS,
 )
 
 
-# === Static & Template Setup ===
-# --- File Paths ---
+# ============================================================
+# Static Files and Jinja2 Template Setup
+# ============================================================
 BASE_DIR = Path(__file__).resolve().parent
 RESOURCES_DIR = BASE_DIR / "agentic_resources"
 TEMPLATES_DIR = RESOURCES_DIR / "templates"
@@ -62,7 +64,16 @@ TEMPLATES_DIR = RESOURCES_DIR / "templates"
 app.mount("/resources", StaticFiles(directory=RESOURCES_DIR), name="resources")
 app.state.templates = Jinja2Templates(directory=TEMPLATES_DIR)
 
-# === Core UI Routes ===
+# ============================================================
+# Health Check
+# ============================================================
+@app.get("/ping")
+def ping():
+    return {"status": "ok"}
+
+# ============================================================
+# Root Index Page
+# ============================================================
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
     """
@@ -75,13 +86,13 @@ async def index(request: Request):
     return templates.TemplateResponse("test.html", data)
 
 # ============================================================
-# Engine Initialization
+# Agent AI Engine Setup: decides how to process messages (intent detection, execution, synthesis)
 # ============================================================
-
-# Agent router decides how to process messages (intent detection, execution, synthesis)
 agent_router = AgentRouter(mode="auto")
 
-# Available tools (name -> callable mapping) used during execution
+# ============================================================
+# Tool Definitions:  (name -> callable mapping) used during execution
+# ============================================================
 TOOLS = [
     get_date,
     get_current_weather,
@@ -89,7 +100,8 @@ TOOLS = [
     activate_channel,
 ]
 
-TOOLS_MAP = AVAILABLE_TOOLS  # mapping of tool name to callable used by the router
+# mapping of tool name to callable used by the router
+TOOLS_MAP = AVAILABLE_TOOLS 
 
 # ============================================================
 # Request / Response Models
@@ -119,11 +131,9 @@ class ChatResponse(BaseModel):
     debug: DebugInfo
 
 
-
 # ============================================================
 # Chat Endpoint
 # ============================================================
-
 @app.post("/chat", response_model=ChatResponse)
 async def chat_endpoint(request: ChatRequest):
     """
@@ -134,21 +144,7 @@ async def chat_endpoint(request: ChatRequest):
     3. Gemini → semantic synthesis
     """
 
-    messages = [
-        {
-            "role": "system",
-            "content": (
-                "You are LEO, a smart model that can do function calling with tools."
-                "Use tools immediately when applicable. "
-                "Do not ask for confirmation if parameters are clear. "
-                "Explain errors plainly."
-            ),
-        },
-        {
-            "role": "user",
-            "content": request.prompt,
-        },
-    ]
+    messages = build_messages(request.prompt)
 
     try:
         logger.info(f"Incoming prompt: {request.prompt}")
@@ -169,14 +165,16 @@ async def chat_endpoint(request: ChatRequest):
         logger.exception("Fatal error in chat endpoint")
         raise HTTPException(status_code=500, detail=str(e))
 
+
 # ============================================================
 # Local Dev Entry
 # ============================================================
 
 if __name__ == "__main__":
+   
     uvicorn.run(
         "main:app",
-        host="0.0.0.0",
-        port=8000,
+        host=MAIN_APP_HOST,
+        port=MAIN_APP_PORT,
         reload=True,
     )

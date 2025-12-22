@@ -1,14 +1,20 @@
 import os
 import logging
 import requests
+import smtplib
+import ssl
+from email.message import EmailMessage
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Type, Optional
+from typing import Dict, Any, Type, Optional, List
 
 # =====================================================
 #  ACTIVATION CHANNEL STRATEGY LAYER (OOP)
 # =====================================================
 
 logger = logging.getLogger("agentic_tools.marketing")
+
+# Centralized configs in separate module
+from main_configs import MarketingConfigs
 
 # Channel alias map to support short names and common variants
 CHANNEL_ALIASES = {
@@ -82,7 +88,7 @@ class NotificationChannel(ABC):
     """Base strategy for all activation channels."""
 
     @abstractmethod
-    def send(self, recipient_segment: str, message: str, **kwargs) -> Dict[str, Any]:
+    def send(self, recipient_segment: str, message: str, **kwargs: Any) -> Dict[str, Any]:
         """Send a message to a recipient segment.
 
         Returns a dict with at least a `status` key.
@@ -91,20 +97,104 @@ class NotificationChannel(ABC):
 
 
 class EmailChannel(NotificationChannel):
-    def send(self, recipient_segment: str, message: str, **kwargs):
-        logger.info("[Email] Segment=%s | Message=%s", recipient_segment, message)
-        # TODO: integrate real SMTP or transactional provider
-        return {"status": "success", "channel": "email", "sent": 120}
+    """Email sending channel supporting multiple backends (SendGrid API and SMTP/Gmail).
+
+    Configuration (via ENV vars):
+      - EMAIL_PROVIDER: 'sendgrid' or 'smtp' (default: 'smtp')
+      - SENDGRID_API_KEY: API key for SendGrid (if using sendgrid)
+      - SENDGRID_FROM: default from email for SendGrid
+      - SMTP_HOST: SMTP host (default: smtp.gmail.com)
+      - SMTP_PORT: SMTP port (default: 587)
+      - SMTP_USERNAME: SMTP login username (for Gmail this is the full email)
+      - SMTP_PASSWORD: SMTP password or app-specific password
+      - SMTP_USE_TLS: '1'/'true' to use STARTTLS (default: true)
+    """
+
+    def __init__(self):
+        # Read provider config from centralized MarketingConfigs
+        self.provider = MarketingConfigs.EMAIL_PROVIDER
+        # SendGrid config
+        self.sendgrid_api_key = MarketingConfigs.SENDGRID_API_KEY
+        self.sendgrid_from = MarketingConfigs.SENDGRID_FROM
+        # SMTP config (Gmail defaults)
+        self.smtp_host = MarketingConfigs.SMTP_HOST
+        self.smtp_port = MarketingConfigs.SMTP_PORT
+        self.smtp_username = MarketingConfigs.SMTP_USERNAME
+        self.smtp_password = MarketingConfigs.SMTP_PASSWORD
+        self.smtp_use_tls = MarketingConfigs.SMTP_USE_TLS
+
+    def send_via_sendgrid(self, recipients: List[str], subject: str, body: str, timeout: int = 6) -> Dict[str, Any]:
+        if not self.sendgrid_api_key:
+            return {"status": "error", "channel": "email", "message": "SENDGRID_API_KEY not set"}
+
+        from_email = self.sendgrid_from or self.smtp_username or "noreply@example.com"
+        payload = {
+            "personalizations": [{"to": [{"email": r} for r in recipients], "subject": subject}],
+            "from": {"email": from_email},
+            "content": [{"type": "text/plain", "value": body}],
+        }
+        headers = {"Authorization": f"Bearer {self.sendgrid_api_key}", "Content-Type": "application/json"}
+
+        try:
+            resp = requests.post("https://api.sendgrid.com/v3/mail/send", json=payload, headers=headers, timeout=timeout)
+            resp.raise_for_status()
+            return {"status": "success", "channel": "email", "provider": "sendgrid", "response_status": resp.status_code}
+        except requests.exceptions.RequestException as exc:
+            logger.error("SendGrid send failed: %s", exc)
+            return {"status": "error", "channel": "email", "provider": "sendgrid", "message": str(exc)}
+
+    def send_via_smtp(self, recipients: List[str], subject: str, body: str, timeout: int = 6) -> Dict[str, Any]:
+        if not self.smtp_username or not self.smtp_password:
+            return {"status": "error", "channel": "email", "message": "SMTP credentials not set"}
+
+        msg = EmailMessage()
+        msg["Subject"] = subject
+        msg["From"] = self.smtp_username
+        msg["To"] = ",".join(recipients)
+        msg.set_content(body)
+
+        try:
+            ctx = ssl.create_default_context()
+            with smtplib.SMTP(self.smtp_host, self.smtp_port, timeout=timeout) as server:
+                if self.smtp_use_tls:
+                    server.starttls(context=ctx)
+                server.login(self.smtp_username, self.smtp_password)
+                server.send_message(msg)
+            return {"status": "success", "channel": "email", "provider": "smtp", "sent_to": recipients}
+        except Exception as exc:
+            logger.error("SMTP send failed: %s", exc)
+            return {"status": "error", "channel": "email", "provider": "smtp", "message": str(exc)}
+
+    def send(self, recipient_segment: str, message: str, **kwargs: Any):
+        logger.info("[Email] Segment=%s | kwargs=%s", recipient_segment, kwargs)
+
+        # Accept a single recipient string, comma-separated string, or list
+        if isinstance(recipient_segment, str):
+            recipients: List[str] = [r.strip() for r in recipient_segment.split(",") if r.strip()]
+        elif isinstance(recipient_segment, list):
+            recipients = recipient_segment
+        else:
+            return {"status": "error", "channel": "email", "message": "invalid recipient format"}
+
+        subject = kwargs.get("subject") or kwargs.get("title") or "Notification"
+        timeout = kwargs.get("timeout", 6)
+        provider = kwargs.get("provider", self.provider)
+
+        if provider == "sendgrid":
+            return self.send_via_sendgrid(recipients, subject, message, timeout=timeout)
+        else:
+            # default to SMTP
+            return self.send_via_smtp(recipients, subject, message, timeout=timeout)
 
 
 class ZaloOAChannel(NotificationChannel):
     def __init__(self):
         DEFAULT_ZALO_OA_API_SEND = "https://openapi.zalo.me/v3.0/oa/message/cs"
-        self.api_url = os.getenv("ZALO_OA_API_URL", DEFAULT_ZALO_OA_API_SEND)
-        self.access_token = os.getenv("ZALO_OA_TOKEN")
-        self.max_retries = int(os.getenv("ZALO_OA_MAX_RETRIES", "1"))
+        self.api_url = MarketingConfigs.ZALO_OA_API_URL or DEFAULT_ZALO_OA_API_SEND
+        self.access_token = MarketingConfigs.ZALO_OA_TOKEN
+        self.max_retries = MarketingConfigs.ZALO_OA_MAX_RETRIES
 
-    def send(self, recipient_segment: str, message: str, **kwargs):
+    def send(self, recipient_segment: str, message: str, **kwargs: Any):
         logger.info("[Zalo OA] Segment=%s", recipient_segment)
 
         if not self.access_token:
@@ -152,7 +242,7 @@ class ZaloOAChannel(NotificationChannel):
 
 
 class MobilePushChannel(NotificationChannel):
-    def send(self, recipient_segment: str, message: str, **kwargs):
+    def send(self, recipient_segment: str, message: str, **kwargs: Any):
         title = kwargs.get("title", "Notification")
         logger.info("[Mobile Push] Segment=%s | Title=%s", recipient_segment, title)
         # TODO: integrate with push provider
@@ -160,7 +250,7 @@ class MobilePushChannel(NotificationChannel):
 
 
 class WebPushChannel(NotificationChannel):
-    def send(self, recipient_segment: str, message: str, **kwargs):
+    def send(self, recipient_segment: str, message: str, **kwargs: Any):
         logger.info("[Web Push] Segment=%s", recipient_segment)
         return {"status": "success", "channel": "web_push"}
 
@@ -168,13 +258,13 @@ class WebPushChannel(NotificationChannel):
 class FacebookPageChannel(NotificationChannel):
     def __init__(self):
         self.graph_api = "https://graph.facebook.com"
-        self.page_token = os.getenv("FB_PAGE_ACCESS_TOKEN")
+        self.page_token = MarketingConfigs.FB_PAGE_ACCESS_TOKEN
 
-    def send(self, recipient_segment: str, message: str, **kwargs):
+    def send(self, recipient_segment: str, message: str, **kwargs: Any):
         logger.info("[Facebook Page] Segment=%s | kwargs=%s", recipient_segment, kwargs)
 
         # Optional: allow explicit page_id or page_name in kwargs; if not provided, just log
-        page_id = kwargs.get("page_id") or os.getenv("FB_PAGE_ID")
+        page_id = kwargs.get("page_id") or MarketingConfigs.FB_PAGE_ID
 
         if page_id and self.page_token:
             # Attempt to post to page feed (simple integration example)
@@ -223,7 +313,7 @@ class ActivationManager:
         return dict(cls._channels)
 
     @classmethod
-    def execute(cls, channel_key: str, segment: str, message: str, **kwargs) -> Dict[str, Any]:
+    def execute(cls, channel_key: str, segment: str, message: str, **kwargs: Any) -> Dict[str, Any]:
         raw = (channel_key or "").lower().strip()
 
         # Normalize incoming key (handles spaces, hyphens, compact forms)
@@ -261,7 +351,7 @@ class ActivationManager:
 # =====================================================
 
 
-def activate_channel(channel: str, segment_name: str, message: str, title: str = "Notification", timeout: Optional[int] = 6, retries: Optional[int] = None, **kwargs) -> Dict[str, Any]:
+def activate_channel(channel: str, segment_name: str, message: str, title: str = "Notification", timeout: Optional[int] = 6, retries: Optional[int] = None, **kwargs: Any) -> Dict[str, Any]:
     """
     LEO CDP activation tool for sending messages.
 
@@ -272,8 +362,8 @@ def activate_channel(channel: str, segment_name: str, message: str, title: str =
         title: Optional title for push notifications.
         timeout: Optional timeout for network requests (in seconds).
         retries: Optional number of retry attempts for network channels.
-        **kwargs: Additional provider-specific options forwarded to channel implementations.
-        
+        kwargs: Additional provider-specific keyword arguments forwarded to channel implementations (e.g. `provider`, `page_id`, `retries`).
+
     Returns:
         A dict with at least a `status` key indicating success or failure, generated message, and other info.
     """
@@ -295,12 +385,18 @@ def activate_channel(channel: str, segment_name: str, message: str, title: str =
     logger.info("Activating channel '%s' (resolved '%s') for segment '%s'", channel, resolved, segment_name)
 
     try:
+        # Forward retries and any other provider-specific kwargs to the channel implementation
+        merged_kwargs = dict(kwargs)
+        merged_kwargs.setdefault("timeout", timeout)
+        if retries is not None:
+            merged_kwargs.setdefault("retries", retries)
+        merged_kwargs.setdefault("title", title)
+
         return ActivationManager.execute(
             channel_key=resolved,
             segment=segment_name,
             message=message,
-            title=title,
-            timeout=timeout,
+            **merged_kwargs,
         )
     except Exception as exc:
         logger.exception("activate_channel failed")

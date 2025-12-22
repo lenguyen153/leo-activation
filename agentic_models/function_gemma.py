@@ -1,30 +1,39 @@
 import os
+import threading
 import re
-import json
 import torch
 import logging
-from dotenv import load_dotenv
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from huggingface_hub import login
 from agentic_models.base import BaseLLMEngine
+from main_configs import GEMMA_FUNCTION_MODEL_ID
 
 # Setup Logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("LEO-CDP-Engine")
+logger = logging.getLogger(__name__)
 
-load_dotenv(override=True)
+_login_lock = threading.Lock()
+_logged_in = False
 
-# 
-# The 270M model is specialized; it requires specific control tokens and prompts.
-DEFAULT_MODEL_ID = os.getenv("DEFAULT_MODEL_ID", "google/functiongemma-270m-it")
+def ensure_hf_login():
+    global _logged_in
+    if _logged_in:
+        return
+
+    with _login_lock:
+        if not _logged_in:
+            token = os.getenv("HF_TOKEN")
+            if not token:
+                raise RuntimeError("HF_TOKEN is not set")
+
+            login(token=token)
+            _logged_in = True
 
 class FunctionGemmaEngine(BaseLLMEngine):
-    def __init__(self, model_id: str = DEFAULT_MODEL_ID):
+    def __init__(self, model_id: str = GEMMA_FUNCTION_MODEL_ID):
         super().__init__()
         self.model_id = model_id
         
-        if os.getenv("HF_TOKEN"):
-            login(token=os.getenv("HF_TOKEN"))
+        ensure_hf_login()
 
         logger.info(f"Loading FunctionGemma model: {self.model_id}")
         

@@ -7,6 +7,24 @@ from typing import Any, Dict, List, Optional
 from agentic_models.function_gemma import FunctionGemmaEngine
 from agentic_models.gemini import GeminiEngine
 
+def build_messages(prompt):
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are LEO, a smart model that can do function calling with tools."
+                "Use tools immediately when applicable. "
+                "Do not ask for confirmation if parameters are clear. "
+                "Explain errors plainly."
+            ),
+        },
+        {
+            "role": "user",
+            "content":  prompt,
+        },
+    ]
+    
+    return messages
 
 class AgentRouter:
     """High-level agent that orchestrates tool intent detection, execution, and synthesis.
