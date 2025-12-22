@@ -221,8 +221,9 @@
 
     #sendBtn {
       border-radius: 12px;
-      width: 50px;
-      height: 50px;
+      width: 55px;
+      height: 55px;
+      margin: 5px;
       display: flex;
       align-items: center;
       justify-content: center;
@@ -350,7 +351,7 @@
       </div>
 
       <div class="input-wrapper">
-        <textarea id="userInput" class="form-control" rows="1" placeholder="Type a message..." autocomplete="off"></textarea>
+        <textarea id="userInput" class="form-control" rows="2" placeholder="Type a message..." autocomplete="off"></textarea>
         <button id="sendBtn" class="btn btn-primary" title="Send Message">
           <i class="fa-solid fa-paper-plane"></i>
         </button>
@@ -358,7 +359,7 @@
     </div>
   </div>
 
-  <script src="/resources/js/chat_db.js"></script>
+  <script src="/resources/js/chat_db.js?_t={{timestamp}}"></script>
   <script>
     const API_URL = "http://localhost:8000/chat"; 
 

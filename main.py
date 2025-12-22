@@ -16,8 +16,7 @@ from pydantic import BaseModel, Field
 # ============================================================
 # Domain Imports
 # ============================================================
-from agentic_models.router import LLMRouter
-from agentic_models.function_gemma import FunctionGemmaEngine
+from agentic_models.router import AgentRouter
 
 from agentic_tools.tools import (
     AVAILABLE_TOOLS,
@@ -79,18 +78,18 @@ async def index(request: Request):
 # Engine Initialization
 # ============================================================
 
-# Router decides which model to use
-llm_router = LLMRouter(mode="auto")
+# Agent router decides how to process messages (intent detection, execution, synthesis)
+agent_router = AgentRouter(mode="auto")
 
-# We still need Gemma directly for tool-call extraction
-tool_engine = FunctionGemmaEngine()
-
+# Available tools (name -> callable mapping) used during execution
 TOOLS = [
     get_date,
     get_current_weather,
     manage_leo_segment,
     activate_channel,
 ]
+
+TOOLS_MAP = AVAILABLE_TOOLS  # mapping of tool name to callable used by the router
 
 # ============================================================
 # Request / Response Models
@@ -154,69 +153,16 @@ async def chat_endpoint(request: ChatRequest):
     try:
         logger.info(f"Incoming prompt: {request.prompt}")
 
-        # ====================================================
-        # 1. TOOL INTENT DETECTION (Gemma only)
-        # ====================================================
-        raw_output = llm_router.generate(messages, TOOLS)
-        tool_calls = llm_router.extract_tool_calls(raw_output) or []
-        debug_calls: List[ToolCallDebug] = []
-        debug_results: List[ToolResultDebug] = []
+        # Delegate to AgentRouter to orchestrate detection, execution and synthesis
+        response = agent_router.handle_message(messages, tools=TOOLS, tools_map=TOOLS_MAP)
 
-      
-        # ====================================================
-        # 2. EXECUTE TOOLS
-        # ====================================================
-        logger.info(f"Executing {len(tool_calls)} tool(s)")
-
-        messages.append({
-            "role": "assistant",
-            "content": None,
-            "tool_calls": [
-                {"type": "function", "function": call}
-                for call in tool_calls
-            ],
-        })
-
-        tool_outputs_for_llm = []
-
-        for call in tool_calls:
-            name = call["name"]
-            args = call.get("arguments", {})
-            
-            debug_calls.append(ToolCallDebug(name=name, arguments=args))
-
-            if name not in AVAILABLE_TOOLS:
-                result = {"error": f"Tool '{name}' not registered"}
-            else:
-                try:
-                    result = AVAILABLE_TOOLS[name](**args)
-                except Exception as exc:
-                    logger.error(f"Tool {name} failed: {exc}")
-                    result = {"error": str(exc)}
-
-            debug_results.append(
-                ToolResultDebug(name=name, response=result)
-            )
-
-            tool_outputs_for_llm.append({
-                "role": "tool",
-                "name": name,
-                "content": json.dumps(result, default=str),
-            })
-
-        messages.extend(tool_outputs_for_llm)
-
-        # ====================================================
-        # 3. FINAL SYNTHESIS (Gemini preferred)
-        # ====================================================
-        final_answer = llm_router.generate(messages, TOOLS)
+        # Build ChatResponse from AgentRouter result
+        debug_calls = [ToolCallDebug(**c) for c in response["debug"]["calls"]]
+        debug_data = [ToolResultDebug(**d) for d in response["debug"]["data"]]
 
         return ChatResponse(
-            answer=final_answer,
-            debug=DebugInfo(
-                calls=debug_calls,
-                data=debug_results,
-            ),
+            answer=response["answer"],
+            debug=DebugInfo(calls=debug_calls, data=debug_data),
         )
 
     except Exception as e:

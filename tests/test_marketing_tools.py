@@ -40,7 +40,10 @@ def test_zalo_oa_send_success(monkeypatch):
         def json(self):
             return {"ok": True}
 
+    calls = {"n": 0}
+
     def fake_post(url, json, headers, timeout):
+        calls["n"] += 1
         assert "recipient" in json
         return FakeResp()
 
@@ -51,3 +54,40 @@ def test_zalo_oa_send_success(monkeypatch):
     assert res["status"] == "success"
     assert res["channel"] == "zalo_oa"
     assert "response" in res
+    assert calls["n"] == 1
+
+
+def test_zalo_oa_retries(monkeypatch):
+    # Simulate first attempt failing and second succeeding
+    class FailOnceResp:
+        def __init__(self, fail):
+            self.status_code = 200
+            self._fail = fail
+        def raise_for_status(self):
+            if self._fail:
+                raise requests.exceptions.RequestException("temporary")
+            return None
+        def json(self):
+            return {"ok": True}
+
+    state = {"calls": 0}
+
+    def fake_post(url, json, headers, timeout):
+        state["calls"] += 1
+        if state["calls"] == 1:
+            return FailOnceResp(True)
+        return FailOnceResp(False)
+
+    monkeypatch.setenv("ZALO_OA_TOKEN", "fake-token")
+    monkeypatch.setattr("requests.post", fake_post)
+
+    res = mt.activate_channel("zalo", "seg_z", "promo 2", timeout=1, retries=1)
+    assert res["status"] == "success"
+    assert state["calls"] == 2
+
+
+def test_facebook_push_alias(monkeypatch):
+    # facebook_push should be recognized and map to facebook_page channel
+    res = mt.activate_channel("facebook_push", "Summer Sale Target", "Hello, this is our products")
+    assert res["status"] == "success"
+    assert res["channel"] == "facebook_page"

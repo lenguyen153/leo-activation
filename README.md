@@ -32,6 +32,50 @@ LEO Activation combines a function-calling-first LLM (FunctionGemma) with a sema
 
 These updates reflect current behavior in `main.py`, `agentic_models/`, `agentic_tools/`, and `data-workers/`.
 
+---
+
+## 🔁 AgentRouter — core orchestration
+
+**AgentRouter** is the centralized runtime that handles incoming chat, decides whether to call tools, executes them, and synthesizes a final reply.
+
+How it works (summary):
+
+1. **Intent & Tool Selection** — `FunctionGemma` is used to detect actionable intent and to emit structured function calls (the FunctionGemma tag format is parsed by the engine).
+2. **Execute Tools** — The router executes tools using a `tools_map` (string → callable). Each callable is invoked with keyword arguments parsed from the model output.
+3. **Synthesize Final Reply** — `Gemini` is used to generate the human-facing response that incorporates tool outputs and diagnostics.
+
+Type expectations:
+
+* `messages: List[Dict[str, Any]]` — the chat history; each message contains `role` and `content`.
+* `tools: Optional[List[Any]]` — model-facing tool declarations (used by FunctionGemma for function-call generation).
+* `tools_map: Dict[str, Callable[..., Any]]` — execution mapping; keys are tool names (strings) and values are callables that accept the expected kwargs.
+* Return value: `Dict[str, Any]` with `{"answer": str, "debug": {"calls": [...], "data": [...]}}`.
+
+Quick example:
+
+```python
+from agentic_models.router import AgentRouter
+from agentic_tools.tools import AVAILABLE_TOOLS
+
+agent = AgentRouter(mode="auto")
+
+messages = [
+  {"role": "system", "content": "You are LEO, a model that can call tools."},
+  {"role": "user", "content": "Send a Zalo message to High Value users: 'Exclusive offer!'"},
+]
+
+# Tools declarations (passed to the model for function generation)
+tools = []
+
+# Execution mapping: name -> callable (e.g., 'activate_channel')
+tools_map = AVAILABLE_TOOLS
+
+result = agent.handle_message(messages, tools=tools, tools_map=tools_map)
+print(result["answer"])
+print(result["debug"])  # calls & results
+```
+
+> Tip: Unit tests patch `AgentRouter.gemma` and `AgentRouter.gemini` to avoid external model/API calls — this makes it easy to assert behavior and tool interactions.
 
 ## 🛠️ Installation & Setup
 
