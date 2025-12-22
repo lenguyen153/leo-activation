@@ -1,9 +1,10 @@
 import os
 import re
+import json
 import torch
 import logging
 from dotenv import load_dotenv
-from transformers import AutoProcessor, AutoModelForCausalLM
+from transformers import AutoTokenizer, AutoModelForCausalLM
 from huggingface_hub import login
 from agentic_models.base import BaseLLMEngine
 
@@ -13,7 +14,8 @@ logger = logging.getLogger("LEO-CDP-Engine")
 
 load_dotenv(override=True)
 
-# Recommended for local function calling
+# 
+# The 270M model is specialized; it requires specific control tokens and prompts.
 DEFAULT_MODEL_ID = os.getenv("DEFAULT_MODEL_ID", "google/functiongemma-270m-it")
 
 class FunctionGemmaEngine(BaseLLMEngine):
@@ -24,11 +26,16 @@ class FunctionGemmaEngine(BaseLLMEngine):
         if os.getenv("HF_TOKEN"):
             login(token=os.getenv("HF_TOKEN"))
 
-        logger.info(f"Loading local model: {self.model_id}")
-        self.processor = AutoProcessor.from_pretrained(self.model_id)
+        logger.info(f"Loading FunctionGemma model: {self.model_id}")
         
-        # Performance optimization: Use 4-bit quantization if available for 270M performance
-        # or stick to bfloat16 for accuracy on A100/H100/RTX 3090+
+        # NOTE: For FunctionGemma, AutoTokenizer is sufficient for chat templates. 
+        # AutoProcessor is often used for multimodal, but this is text-to-text.
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
+        
+        # ------------------------------------------------------------------
+        # ACCURACY TIP: Do not quantize 270M models to 4-bit/8-bit unless necessary.
+        # The model is tiny (~0.6 GB). Precision loss at this scale is severe.
+        # ------------------------------------------------------------------
         torch_dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
         
         self.model = AutoModelForCausalLM.from_pretrained(
@@ -40,46 +47,34 @@ class FunctionGemmaEngine(BaseLLMEngine):
 
     def extract_tool_calls(self, text: str):
         """
-        Improved extraction for LEO CDP. 
-        Handles:
-        1. Truncated outputs (missing <end_function_call>).
-        2. Multi-line arguments and nested commas.
-        3. Type-safe casting for LEO activation parameters.
+        Parses FunctionGemma's specific output format:
+        <start_function_call>call:func_name{param:<escape>value<escape>}<end_function_call>
         """
-        
-        # 1. Pre-processing: Auto-fix truncated tags (common in 270M models)
-        if "<start_function_call>" in text and "<end_function_call>" not in text:
-            text += "}<end_function_call>"
-
-        def cast_value(v: str):
-            v = v.strip()
-            # Handle LEO-specific booleans
-            if v.lower() in ("true", "false"):
-                return v.lower() == "true"
-            # Handle Numeric IDs/Counts
-            try:
-                if '.' in v: return float(v)
-                return int(v)
-            except ValueError:
-                # Clean strings and handle the <escape> protocol used by FunctionGemma
-                return v.replace("<escape>", "").strip("'\" ")
-
         calls = []
         
-        # Regex designed for the FunctionGemma control tokens: 
-        # <start_function_call>call:func_name{key:val}<end_function_call>
+        # 1. Clean and normalize tags
+        if "<start_function_call>" in text and "<end_function_call>" not in text:
+            text += "}<end_function_call>" # Attempt to close truncated generations
+
+        # 2. Regex for the function block
+        # Matches: call:func_name{...} inside the tags
+        # Logic: Finds the function name and the raw argument string inside the braces
         pattern = r"<start_function_call>call:(\w+)\{(.*?)\}(?:<end_function_call>|$)"
         
         for name, args_block in re.findall(pattern, text, re.DOTALL):
             parsed_args = {}
             
-            # This sub-pattern extracts 'key:value' pairs while respecting <escape> blocks
-            # which FunctionGemma uses for strings containing commas or special characters.
-            arg_pairs = re.findall(r"(\w+):(?:<escape>(.*?)<escape>|([^,}]*))", args_block)
+            # 3. Robust Argument Parsing
+            # FunctionGemma uses 'key:value' or 'key:<escape>value<escape>'
+            # We split by comma BUT ignore commas inside <escape> tags.
             
-            for k, v_escaped, v_raw in arg_pairs:
-                val = v_escaped if v_escaped else v_raw
-                parsed_args[k] = cast_value(val)
+            # This regex finds: key : ( <escape>content<escape> OR simple_value )
+            arg_pattern = r"(\w+)\s*:\s*(?:<escape>(.*?)<escape>|([^,{}]+))"
+            
+            for k, v_escaped, v_simple in re.findall(arg_pattern, args_block):
+                # Choose the captured group that isn't empty
+                raw_val = v_escaped if v_escaped else v_simple
+                parsed_args[k] = self._cast_value(raw_val)
 
             calls.append({
                 "name": name,
@@ -88,15 +83,48 @@ class FunctionGemmaEngine(BaseLLMEngine):
 
         return calls
 
+    def _cast_value(self, v: str):
+        """Helper to cast string values to python types for LEO CDP."""
+        v = v.strip()
+        if v.lower() == "true": return True
+        if v.lower() == "false": return False
+        if v.lower() in ("none", "null"): return None
+        
+        # Try numeric
+        try:
+            if "." in v: return float(v)
+            return int(v)
+        except ValueError:
+            pass
+            
+        # Clean quotes if they exist (though <escape> usually handles this)
+        return v.strip("'\"")
+
     def generate(self, messages, tools=None) -> str:
         """
-        Generates structured tool calls with specific constraints for 
-        FunctionGemma accuracy.
+        Generates response using FunctionGemma's specific developer role constraints.
         """
-        # Ensure the system/developer prompt explicitly mentions LEO CDP context
-        # to ground the 270M model.
         
-        inputs = self.processor.apply_chat_template(
+        # 
+        # Vital: Check if the mandatory developer prompt exists. 
+        # FunctionGemma IGNORES tools if this specific line is missing.
+        SYSTEM_TRIGGER = "You are a model that can do function calling with the following functions"
+        
+        has_trigger = any(
+            m.get("role") in ["system", "developer"] and SYSTEM_TRIGGER in m.get("content", "")
+            for m in messages
+        )
+
+        if not has_trigger and tools:
+            # Inject the mandatory system prompt for FunctionGemma
+            # It maps 'system' to 'developer' role internally usually, but we make it explicit
+            messages.insert(0, {
+                "role": "system", 
+                "content": SYSTEM_TRIGGER
+            })
+
+        # Apply chat template handles the <start_function_declaration> formatting automatically
+        inputs = self.tokenizer.apply_chat_template(
             messages,
             tools=tools,
             add_generation_prompt=True,
@@ -107,19 +135,18 @@ class FunctionGemmaEngine(BaseLLMEngine):
         with torch.inference_mode():
             output = self.model.generate(
                 **inputs,
-                max_new_tokens=512, # Increased for complex segmentation queries
-                pad_token_id=self.processor.eos_token_id,
-                # Accuracy Boost: Greedy search (do_sample=False) is better for tool calling
+                max_new_tokens=512,
+                # Greedy decoding is STRONGLY recommended for function calling accuracy
                 do_sample=False, 
-                # Frequency penalty helps prevent the 270M model from looping XML tags
-                repetition_penalty=1.1 
+                # Slightly higher rep penalty to stop 270M from looping
+                repetition_penalty=1.05 
             )
 
         gen_tokens = output[0][inputs["input_ids"].shape[1]:]
-        decoded = self.processor.decode(gen_tokens, skip_special_tokens=True)
+        decoded = self.tokenizer.decode(gen_tokens, skip_special_tokens=True)
         
-        # Post-processing: ensure XML tags are balanced (Gemma 270M sometimes cuts off)
-        if "<start_function_call>" in decoded and "<end_function_call>" not in decoded:
-            decoded += "}<end_function_call>"
-            
+        # Fallback: Log if we expected a tool call but got plain text
+        if tools and "<start_function_call>" not in decoded and len(decoded) < 20:
+             logger.warning(f"Engine Warning: Model did not trigger function call. Output: {decoded}")
+
         return decoded

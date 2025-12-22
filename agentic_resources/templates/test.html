@@ -148,15 +148,15 @@
     }
     
     .debug-box {
-      margin-top: 8px;
-      font-size: 11px;
-      background: #1f2937;
-      color: #10b981;
-      border-radius: 8px;
-      padding: 10px;
-      white-space: pre-wrap;
-      display: none; /* Hidden by default */
-      font-family: 'Courier New', monospace;
+        margin-top: 8px;
+        font-size: 13px;
+        background: #1f2937;
+        color: #EFFF00;
+        border-radius: 8px;
+        padding: 10px;
+        white-space: pre-wrap;
+        display: none;
+        font-family: 'Courier New', monospace;
     }
 
     /* Footer & Input Area */
@@ -260,8 +260,9 @@
     }
 
     .suggestion-item:hover {
-      background: #f9fafb;
+      background: #F7F7F7;
       color: #4f46e5;
+      font-weight: bold;
     }
 
     .suggestion-item:last-child {
@@ -342,15 +343,14 @@
       <ul id="suggestionsList" class="suggestions-list"></ul>
 
       <div class="quick-suggestions">
-        <div class="chip" onclick="useChip(this)">What is the weather in HCMC?</div>
+        <div class="chip" onclick="useChip(this)">What is the weather in Ho Chi Minh City today?</div>
         <div class="chip" onclick="useChip(this)">Show me customer segments</div>
         <div class="chip" onclick="useChip(this)">Analyze data profile</div>
         <div class="chip" onclick="useChip(this)">Help</div>
       </div>
 
       <div class="input-wrapper">
-        <textarea id="userInput" class="form-control" rows="1"
-          placeholder="Type a message..." autocomplete="off"></textarea>
+        <textarea id="userInput" class="form-control" rows="1" placeholder="Type a message..." autocomplete="off"></textarea>
         <button id="sendBtn" class="btn btn-primary" title="Send Message">
           <i class="fa-solid fa-paper-plane"></i>
         </button>

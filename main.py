@@ -139,7 +139,7 @@ async def chat_endpoint(request: ChatRequest):
         {
             "role": "system",
             "content": (
-                "You are an expert assistant for LEO CDP. "
+                "You are LEO, a smart model that can do function calling with tools."
                 "Use tools immediately when applicable. "
                 "Do not ask for confirmation if parameters are clear. "
                 "Explain errors plainly."
@@ -158,6 +158,8 @@ async def chat_endpoint(request: ChatRequest):
         # 1. TOOL INTENT DETECTION (Gemma only)
         # ====================================================
         raw_output = tool_engine.generate(messages, TOOLS)
+        logger.info(f"raw_output \n {raw_output} \n ")
+        
         tool_calls = tool_engine.extract_tool_calls(raw_output) or []
 
         debug_calls: List[ToolCallDebug] = []
@@ -167,7 +169,7 @@ async def chat_endpoint(request: ChatRequest):
         # 2. NO TOOLS → SEMANTIC ANSWER (Router decides)
         # ====================================================
         if not tool_calls:
-            answer = llm_router.generate(messages)
+            answer = llm_router.generate(messages, TOOLS)
             return ChatResponse(
                 answer=answer,
                 debug=DebugInfo(calls=[], data=[]),
@@ -219,7 +221,7 @@ async def chat_endpoint(request: ChatRequest):
         # ====================================================
         # 4. FINAL SYNTHESIS (Gemini preferred)
         # ====================================================
-        final_answer = llm_router.generate(messages)
+        final_answer = llm_router.generate(messages, TOOLS)
 
         return ChatResponse(
             answer=final_answer,

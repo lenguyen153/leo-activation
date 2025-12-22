@@ -1,6 +1,6 @@
 // Pre-defined suggestions list for auto-complete
 const SUGGESTIONS_DB = [
-  "What is the weather in Ho Chi Minh City?",
+  "What is the weather in Ho Chi Minh City today?",
   "How do I create a new customer profile?",
   "Explain LEO CDP data architecture",
   "Show me the latest user statistics",
