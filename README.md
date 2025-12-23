@@ -110,7 +110,7 @@ pip install -r requirements.txt
 Create a `.env` file in the root directory:
 
 ```text
-HF_TOKEN=your_huggingface_token
+HUGGINGFACE_TOKEN=your_huggingface_token
 ZALO_OA_TOKEN=your_zalo_token
 LEO_CDP_API_URL=http://your-leo-cdp-instance:8080
 
@@ -145,7 +145,7 @@ FB_PAGE_ACCESS_TOKEN=your_facebook_page_token
 FB_PAGE_ID=your_facebook_page_id
 
 # Optional helpers
-HF_TOKEN=your_huggingface_token
+HUGGINGFACE_TOKEN=your_huggingface_token
 LEO_CDP_API_URL=http://your-leo-cdp-instance:8080
 
 ```

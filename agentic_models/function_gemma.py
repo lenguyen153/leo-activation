@@ -6,7 +6,7 @@ import logging
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from huggingface_hub import login
 from agentic_models.base import BaseLLMEngine
-from main_configs import GEMMA_FUNCTION_MODEL_ID
+from main_configs import GEMMA_FUNCTION_MODEL_ID, HUGGINGFACE_TOKEN
 
 # Setup Logging
 logger = logging.getLogger(__name__)
@@ -21,9 +21,9 @@ def ensure_hf_login():
 
     with _login_lock:
         if not _logged_in:
-            token = os.getenv("HF_TOKEN")
+            token = HUGGINGFACE_TOKEN
             if not token:
-                raise RuntimeError("HF_TOKEN is not set")
+                raise RuntimeError("HUGGINGFACE_TOKEN is not set")
 
             login(token=token)
             _logged_in = True
