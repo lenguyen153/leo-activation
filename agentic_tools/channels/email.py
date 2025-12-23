@@ -269,14 +269,32 @@ class EmailChannel(NotificationChannel):
     # Public Entry Point
     # ============================================================
 
-    def send(self, segment_name: str, message: str, **kwargs: Any) -> Dict[str, Any]:
-        logger.info("[Email] Segment=%s | kwargs=%s", segment_name, kwargs)
+    def send(self, recipient_segment: str, message: str, **kwargs: Any) -> Dict[str, Any]:
+        """_summary_
 
-        # TODO: Replace with real segment → email resolution
-        recipients = kwargs.get("recipients") or [
-            "tantrieuf31.database@gmail.com",
-            "tantrieuf31@gmail.com",
-        ]
+        Args:
+            recipient_segment (str): the recipient segment identifier
+            message (str): the message body of the email
+            **kwargs: additional parameters:
+              - recipients: List[str] - explicit list of recipient emails
+              - subject: str - email subject
+              - timeout: int - request timeout in seconds
+              - provider: str - 'brevo', 'sendgrid', or 'smtp' to override default provider
+
+        Returns:
+            Dict[str, Any]: result dict
+        """
+        logger.info("[Email] Segment=%s | kwargs=%s", recipient_segment, kwargs)
+
+        if "recipients" in kwargs:
+            recipients = kwargs["recipients"]
+        else:
+            # TODO: Replace with real segment → email resolution
+            recipients = [
+                "tantrieuf31.database@gmail.com",
+                "tantrieuf31@gmail.com",
+            ]
+
 
         subject = kwargs.get("subject") or "Notification"
         timeout = kwargs.get("timeout", 8)
@@ -290,3 +308,7 @@ class EmailChannel(NotificationChannel):
 
         # Default fallback
         return self.send_via_smtp(recipients, subject, message, timeout)
+
+# ============================================================
+# End Email Channel Class
+# ============================================================
