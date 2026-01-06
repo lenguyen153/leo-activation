@@ -1,383 +1,354 @@
 -- ============================================================
 -- AI-Driven Marketing Automation – Core Data Schema
--- ============================================================
--- This schema is designed for:
---  - Multi-tenant SaaS (tenant isolation via tenant_id + RLS)
---  - Deterministic event identity (hash-based event_id)
---  - High-scale ingestion (partitioning by tenant)
---  - AI semantic search (pgvector embeddings)
---  - Async background embedding jobs
+-- PostgreSQL 16
+-- Status: Production Ready
 -- ============================================================
 
-
 -- =========================
--- Required Extensions
+-- 1. Required Extensions
 -- =========================
--- pgcrypto:
---  - gen_random_uuid() for tenant_id
---  - digest() for SHA-256 event hashing
---
--- vector (pgvector):
---  - store and index embedding vectors for semantic search
---
+-- crypto: For gen_random_uuid() and hashing functions
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
+-- vector: For AI embeddings (OpenAI/Llama)
 CREATE EXTENSION IF NOT EXISTS vector;
-
+-- citext: For case-insensitive email storage
+CREATE EXTENSION IF NOT EXISTS citext;
 
 -- =========================
--- Tenant Table
+-- 2. Utility Functions
 -- =========================
--- Each tenant represents an isolated customer/account
--- in the SaaS platform.
---
--- tenant_id is UUID to:
---  - avoid guessable IDs
---  - simplify cross-system references
---  - scale safely in distributed environments
---
-CREATE TABLE tenant (
+-- Generic function to auto-update 'updated_at' columns
+CREATE OR REPLACE FUNCTION update_timestamp()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = now();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- =========================
+-- 3. Tenant Table
+-- =========================
+CREATE TABLE IF NOT EXISTS tenant (
     tenant_id   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_name TEXT NOT NULL,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    status      TEXT DEFAULT 'active', -- useful for soft bans
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TRIGGER trg_tenant_updated_at
+BEFORE UPDATE ON tenant
+FOR EACH ROW EXECUTE FUNCTION update_timestamp();
 
--- =========================
--- Marketing Event (Partitioned)
--- =========================
--- Core business entity:
--- campaigns, webinars, promotions, offline events, etc.
---
--- Design goals:
---  - Deterministic ID (hash) instead of sequence
---  - Tenant-scoped primary key
---  - Optimized for read + AI enrichment
---
-CREATE TABLE marketing_event (
-    -- Multi-tenant isolation key
-    tenant_id         UUID NOT NULL
-        REFERENCES tenant(tenant_id)
-        ON DELETE CASCADE,
+-- ============================================================
+-- 4. CDP Profiles
+-- ============================================================
+-- Central table for customer data.
+-- Uses JSONB for flexible schema evolution (traits, custom fields).
+-- ============================================================
 
-    -- Deterministic event identifier
-    -- Generated via SHA-256 hash in trigger
-    event_id          TEXT NOT NULL,
+CREATE TABLE IF NOT EXISTS cdp_profiles (
+    -- Multi-tenancy Isolation
+    tenant_id                UUID NOT NULL REFERENCES tenant(tenant_id) ON DELETE CASCADE,
+    
+    -- Identity
+    profile_id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    ext_id                   TEXT, -- External ID from CRM/ERP
+    
+    -- Contact Info (Case Insensitive Email)
+    email                    CITEXT,
+    landline_number          TEXT,
+    mobile_number            TEXT,
+    whatsapp_number          TEXT,
+    zalo_number              TEXT,
+    sms_number               TEXT,
 
-    -- Human & semantic content
-    event_name        TEXT NOT NULL,
-    event_description TEXT,
+    -- Personal Info
+    first_name               TEXT,
+    last_name                TEXT,
+    job_title                TEXT,
+    company_name             TEXT,
+    date_of_birth            DATE,
 
-    -- Used heavily for filtering, analytics, and models
-    event_type        TEXT NOT NULL,      -- e.g. webinar, email, offline
-    event_channel     TEXT NOT NULL,      -- e.g. facebook, email, tiktok
+    -- social profiles
+    linkedin_url             TEXT,
+    facebook_url             TEXT,
+    youtube_url             TEXT,
+    tiktok_url             TEXT,
+    
+    -- Metadata
+    contact_owner            TEXT,
+    contact_timezone         TEXT,
 
-    -- Temporal semantics (important for analytics & planning)
-    start_at          TIMESTAMPTZ NOT NULL,
-    end_at            TIMESTAMPTZ NOT NULL,
-    timezone          TEXT NOT NULL DEFAULT 'UTC',
+    -- Flexible Data Structures
+    working_companies        JSONB, -- e.g. [{ "name": "Corp A", "role": "CEO" }]
+    
+    -- Segmentation
+    segments                 JSONB NOT NULL DEFAULT '[]'::jsonb,
+    data_labels              JSONB NOT NULL DEFAULT '[]'::jsonb,
+    data_journey_maps        JSONB NOT NULL DEFAULT '[]'::jsonb,
 
-    -- Contextual metadata
-    location          TEXT,
-    event_url         TEXT,
+    -- Commercial Metrics
+    total_lead_score         INTEGER DEFAULT 0,
+    clv_score                NUMERIC(12,2) DEFAULT 0.00,
+    total_transaction_value  NUMERIC(18,2) DEFAULT 0.00,
 
-    -- Marketing-specific dimensions
-    campaign_code     TEXT,
-    target_audience   TEXT,
-    budget_amount     NUMERIC(12,2),
-    currency          CHAR(3) DEFAULT 'USD',
+    -- Compliance (GDPR/CCPA)
+    opt_in                   BOOLEAN DEFAULT FALSE,
+    double_opt_in            BOOLEAN DEFAULT FALSE,
+    opt_in_metadata          JSONB,
 
-    -- Ownership & accountability
-    owner_team        TEXT,
-    owner_email       TEXT,
+    -- Event Tracking
+    last_event_date          DATE,
+    
+    -- Catch-all for unstructured traits
+    raw_attributes           JSONB NOT NULL DEFAULT '{}'::jsonb,
 
-    -- Lifecycle state
-    -- planned → active → completed → cancelled
-    status            TEXT NOT NULL DEFAULT 'planned',
+    -- Audit
+    created_at               TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at               TIMESTAMPTZ NOT NULL DEFAULT now(),
 
-    -- =========================
-    -- AI / Embedding Fields
-    -- =========================
-    -- pgvector embedding for semantic search, clustering,
-    -- recommendation, and LLM retrieval.
-    --
-    -- 1536 matches OpenAI / Gemini common embedding size
-    --
-    embedding         VECTOR(1536),
+    -- Constraints
+    -- Ensure external ID is unique per tenant
+    CONSTRAINT uq_cdp_profile_ext UNIQUE (tenant_id, ext_id)
+);
 
-    -- Tracks embedding lifecycle
-    -- pending | processing | ready | failed
-    embedding_status  TEXT NOT NULL DEFAULT 'pending',
+-- CDP Triggers
+CREATE TRIGGER trg_cdp_profiles_updated_at
+BEFORE UPDATE ON cdp_profiles
+FOR EACH ROW EXECUTE FUNCTION update_timestamp();
+
+-- CDP Indexes
+-- Standard B-Tree for lookups
+CREATE INDEX IF NOT EXISTS idx_cdp_profiles_email ON cdp_profiles (tenant_id, email);
+CREATE INDEX IF NOT EXISTS idx_cdp_profiles_mobile ON cdp_profiles (tenant_id, mobile_number);
+
+-- GIN Indexes for high-speed JSONB querying
+-- jsonb_path_ops is faster but only supports @> operator (contains)
+CREATE INDEX IF NOT EXISTS idx_cdp_profiles_segments 
+ON cdp_profiles USING GIN (segments jsonb_path_ops);
+
+CREATE INDEX IF NOT EXISTS idx_cdp_profiles_labels 
+ON cdp_profiles USING GIN (leo_data_labels, cdp_data_labels);
+
+CREATE INDEX IF NOT EXISTS idx_cdp_profiles_raw 
+ON cdp_profiles USING GIN (raw_attributes);
+
+-- CDP RLS
+ALTER TABLE cdp_profiles ENABLE ROW LEVEL SECURITY;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE polname = 'cdp_profiles_tenant_rls') THEN
+        CREATE POLICY cdp_profiles_tenant_rls ON cdp_profiles
+        USING (tenant_id = current_setting('app.current_tenant_id', true)::uuid)
+        WITH CHECK (tenant_id = current_setting('app.current_tenant_id', true)::uuid);
+    END IF;
+END $$;
+
+-- ============================================================
+-- 5. Marketing Event (Partitioned)
+-- ============================================================
+-- Partitioned by Hash(tenant_id) to distribute high-volume write load.
+-- Note: Queries MUST include tenant_id to be efficient.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS marketing_event (
+    tenant_id          UUID NOT NULL REFERENCES tenant(tenant_id) ON DELETE CASCADE,
+    
+    -- Deterministic Hash ID
+    event_id           TEXT NOT NULL, 
+
+    -- Content
+    event_name         TEXT NOT NULL,
+    event_description  TEXT,
+    event_type         TEXT NOT NULL,   -- e.g. 'webinar', 'email'
+    event_channel      TEXT NOT NULL,   -- e.g. 'online', 'in-person'
+
+    -- Timing
+    start_at           TIMESTAMPTZ NOT NULL,
+    end_at             TIMESTAMPTZ NOT NULL,
+    timezone           TEXT NOT NULL DEFAULT 'UTC',
+
+    -- Details
+    location           TEXT,
+    event_url          TEXT,
+    campaign_code      TEXT,
+    target_audience    TEXT,
+    target_segments    JSONB NOT NULL DEFAULT '[]'::jsonb,
+    media_assets      JSONB NOT NULL DEFAULT '[]'::jsonb,
+    
+    -- Finance
+    budget_amount      NUMERIC(12,2),
+    currency           CHAR(3) DEFAULT 'USD',
+
+    -- Ownership
+    owner_team         TEXT,
+    owner_email        TEXT,
+
+    -- Lifecycle
+    status             TEXT NOT NULL DEFAULT 'planned',
+
+    -- AI / Vector Search
+    -- 1536 is standard for OpenAI text-embedding-3-small/ada-002
+    embedding          VECTOR(1536),
+    embedding_status   TEXT NOT NULL DEFAULT 'pending', -- pending, processed, failed
     embedding_updated_at TIMESTAMPTZ,
 
-    -- Auditing
-    created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
 
-    -- Composite PK ensures:
-    --  - no cross-tenant collision
-    --  - efficient tenant-scoped queries
-    CONSTRAINT pk_marketing_event
-        PRIMARY KEY (tenant_id, event_id),
-
-    -- Data sanity check
-    CONSTRAINT chk_event_time
-        CHECK (end_at > start_at)
+    -- Partition Key must be part of Primary Key
+    CONSTRAINT pk_marketing_event PRIMARY KEY (tenant_id, event_id),
+    CONSTRAINT chk_event_time CHECK (end_at >= start_at)
 
 ) PARTITION BY HASH (tenant_id);
 
-
--- =========================
--- Hash Partitions
--- =========================
--- 16 partitions is a good baseline:
---  - parallelism for reads/writes
---  - manageable planner overhead
---
--- Can be increased later (32 / 64) if tenants grow unevenly
---
+-- Create Partitions (p0 to p15)
 DO $$
 BEGIN
     FOR i IN 0..15 LOOP
         EXECUTE format(
-            'CREATE TABLE marketing_event_p%s
-             PARTITION OF marketing_event
-             FOR VALUES WITH (MODULUS 16, REMAINDER %s);',
+            'CREATE TABLE IF NOT EXISTS marketing_event_p%s 
+             PARTITION OF marketing_event 
+             FOR VALUES WITH (MODULUS 16, REMAINDER %s);', 
             i, i
         );
     END LOOP;
 END $$;
 
-
--- =========================
--- Deterministic Event ID Generator
--- =========================
--- Generates a SHA-256 hash from business-meaningful fields.
---
--- Why this matters:
---  - Idempotent inserts (safe replays)
---  - Natural upserts
---  - Prevents accidental duplicates
---
--- Including created_at ensures:
---  - Same campaign reused later ≠ same event
---
+-- Event ID Generator (Deterministic Hash)
 CREATE OR REPLACE FUNCTION generate_marketing_event_id()
 RETURNS TRIGGER AS $$
-DECLARE
-    hash_input TEXT;
 BEGIN
-    hash_input := lower(
-        trim(
-            concat_ws(
-                '||',
-                NEW.event_name,
-                NEW.event_type,
-                NEW.event_channel,
-                COALESCE(NEW.location, ''),
-                COALESCE(NEW.event_url, ''),
-                COALESCE(NEW.owner_team, ''),
-                COALESCE(NEW.campaign_code, ''),
-                NEW.created_at::text
-            )
-        )
-    );
-
-    -- SHA-256 hex string (64 chars)
-    NEW.event_id := encode(digest(hash_input, 'sha256'), 'hex');
-
-    -- Always update updated_at on insert
+    -- We use sha256 to create a deterministic ID based on content + time + tenant
+    -- This prevents exact duplicates and creates a consistent ID for external ref
+    NEW.event_id := encode(digest(lower(concat_ws('||',
+            NEW.tenant_id::text,
+            NEW.event_name,
+            NEW.event_type,
+            NEW.event_channel,
+            COALESCE(NEW.campaign_code, ''),
+            -- Use COALESCE on created_at in case it hasn't settled yet
+            COALESCE(NEW.created_at, now())::text 
+        )), 'sha256'), 'hex');
+    
+    -- Ensure updated_at is set
     NEW.updated_at := now();
-
+    
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
+-- Event Triggers
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_event_hash') THEN
+        CREATE TRIGGER trg_event_hash
+        BEFORE INSERT ON marketing_event
+        FOR EACH ROW EXECUTE FUNCTION generate_marketing_event_id();
+    END IF;
+    
+    -- Separate updated_at trigger for updates
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_event_updated_at') THEN
+        CREATE TRIGGER trg_event_updated_at
+        BEFORE UPDATE ON marketing_event
+        FOR EACH ROW EXECUTE FUNCTION update_timestamp();
+    END IF;
+END $$;
 
--- Trigger fires only on INSERT
--- (updates should not regenerate event_id)
-CREATE TRIGGER trg_event_hash
-BEFORE INSERT ON marketing_event
-FOR EACH ROW
-EXECUTE FUNCTION generate_marketing_event_id();
+-- Event Indexes
+CREATE INDEX IF NOT EXISTS idx_event_lookup ON marketing_event (tenant_id, status);
+CREATE INDEX IF NOT EXISTS idx_event_timeline ON marketing_event (tenant_id, start_at);
 
+-- VECTOR INDEX (HNSW)
+-- Changed from IVFFLAT to HNSW. HNSW is better for:
+-- 1. Real-time inserts (no training step required).
+-- 2. Performance on smaller datasets (starts working immediately).
+-- 3. Robustness (IVFFLAT yields 0 results if built on empty table).
+CREATE INDEX IF NOT EXISTS idx_event_embedding 
+ON marketing_event USING hnsw (embedding vector_cosine_ops);
+
+-- Event RLS
+ALTER TABLE marketing_event ENABLE ROW LEVEL SECURITY;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE polname = 'marketing_event_tenant_rls') THEN
+        CREATE POLICY marketing_event_tenant_rls ON marketing_event
+        USING (tenant_id = current_setting('app.current_tenant_id', true)::uuid)
+        WITH CHECK (tenant_id = current_setting('app.current_tenant_id', true)::uuid);
+    END IF;
+END $$;
 
 -- =========================
--- Embedding Job Queue
+-- 6. Embedding Job Queue
 -- =========================
--- Lightweight job table for async workers.
---
--- Pattern:
---  - DB trigger enqueues
---  - Worker SELECT ... FOR UPDATE SKIP LOCKED
---  - Update embedding + status
---
-CREATE TABLE embedding_job (
-    job_id     BIGSERIAL PRIMARY KEY,
-    tenant_id  UUID NOT NULL,
-    event_id   TEXT NOT NULL,
-
-    -- pending | processing | done | failed
-    status     TEXT NOT NULL DEFAULT 'pending',
-
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-
-    -- Used for job locking / lease mechanism
-    locked_at  TIMESTAMPTZ
+-- Simple table to act as a queue for Python/Node workers to pick up 
+-- text and generate embeddings.
+CREATE TABLE IF NOT EXISTS embedding_job (
+    job_id      BIGSERIAL PRIMARY KEY,
+    tenant_id   UUID NOT NULL,
+    event_id    TEXT NOT NULL,
+    status      TEXT NOT NULL DEFAULT 'pending', -- pending, processing, completed, failed
+    attempts    INTEGER DEFAULT 0,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    locked_at   TIMESTAMPTZ -- used for concurrency locking
 );
 
+-- Index for workers to find pending jobs quickly
+CREATE INDEX IF NOT EXISTS idx_embedding_job_queue 
+ON embedding_job (status, created_at) 
+WHERE status = 'pending';
 
--- =========================
--- Enqueue Embedding Job Trigger
--- =========================
--- Automatically enqueue a job when:
---  - New event is created
---  - Semantic content changes
---
--- This keeps AI pipelines eventually consistent
--- without blocking writes.
---
+-- Trigger to Enqueue Jobs
 CREATE OR REPLACE FUNCTION enqueue_embedding_job()
 RETURNS TRIGGER AS $$
 BEGIN
-    INSERT INTO embedding_job (tenant_id, event_id)
-    VALUES (NEW.tenant_id, NEW.event_id);
-
+    -- Only enqueue if relevant fields changed
+    IF (TG_OP = 'INSERT') OR 
+       (NEW.event_name IS DISTINCT FROM OLD.event_name) OR 
+       (NEW.event_description IS DISTINCT FROM OLD.event_description) THEN
+       
+       INSERT INTO embedding_job (tenant_id, event_id)
+       VALUES (NEW.tenant_id, NEW.event_id);
+       
+       -- Reset embedding status on the main table
+       NEW.embedding_status := 'pending';
+    END IF;
+    
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
-
-CREATE TRIGGER trg_enqueue_embedding
-AFTER INSERT OR UPDATE OF event_name, event_description
-ON marketing_event
-FOR EACH ROW
-EXECUTE FUNCTION enqueue_embedding_job();
-
-
--- =========================
--- Indexes
--- =========================
--- Tenant-scoped filtering by lifecycle
-CREATE INDEX idx_event_status
-ON marketing_event (tenant_id, status);
-
--- Time-based queries (calendars, planning, analytics)
-CREATE INDEX idx_event_start
-ON marketing_event (tenant_id, start_at);
-
--- Vector index for semantic search
--- ivfflat is fast and memory-efficient
--- lists=100 is a reasonable starting point
---
--- IMPORTANT:
---  - Requires ANALYZE after enough rows
---  - Tune lists based on dataset size
---
-CREATE INDEX idx_event_embedding
-ON marketing_event
-USING ivfflat (embedding vector_cosine_ops)
-WITH (lists = 100);
-
-
--- =========================
--- Row-Level Security (RLS)
--- =========================
--- Enforces tenant isolation at the database level.
---
--- Application MUST set:
---   SET app.current_tenant_id = '<uuid>';
---
-ALTER TABLE marketing_event ENABLE ROW LEVEL SECURITY;
-
-
-CREATE POLICY tenant_rls
-ON marketing_event
-USING (
-    tenant_id = current_setting('app.current_tenant_id')::uuid
-)
-WITH CHECK (
-    tenant_id = current_setting('app.current_tenant_id')::uuid
-);
-
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_enqueue_embedding') THEN
+        CREATE TRIGGER trg_enqueue_embedding
+        BEFORE INSERT OR UPDATE ON marketing_event
+        FOR EACH ROW EXECUTE FUNCTION enqueue_embedding_job();
+    END IF;
+END $$;
 
 -- ============================================================
--- Clean Semantic View for AI Embeddings
+-- 7. Embedding View (Context Prep)
 -- ============================================================
--- Purpose:
---   Produce a deterministic, human-readable text block
---   optimized for LLM embeddings and semantic search.
---
--- This view:
---   - Removes noisy fields (ids, timestamps, money math)
---   - Normalizes casing and spacing
---   - Preserves marketing meaning
+-- Pre-formats the text so the AI worker just queries this view
 -- ============================================================
-
 CREATE OR REPLACE VIEW event_content_for_embedding AS
-SELECT
+SELECT 
     me.tenant_id,
     me.event_id,
-
-    -- =========================
-    -- Canonical Embedding Text
-    -- =========================
-    trim(
-        regexp_replace(
-            concat_ws(
-                E'\n\n',
-
-                -- Event title
-                format(
-                    'Event: %s',
-                    initcap(me.event_name)
-                ),
-
-                -- Description (most important semantic signal)
-                me.event_description,
-
-                -- Core classification
-                format(
-                    'Type: %s | Channel: %s',
-                    initcap(me.event_type),
-                    initcap(me.event_channel)
-                ),
-
-                -- Campaign context
-                CASE
-                    WHEN me.campaign_code IS NOT NULL
-                    THEN format('Campaign code: %s', me.campaign_code)
-                END,
-
-                -- Target audience
-                CASE
-                    WHEN me.target_audience IS NOT NULL
-                    THEN format('Target audience: %s', me.target_audience)
-                END,
-
-                -- Location context (important for geo semantics)
-                CASE
-                    WHEN me.location IS NOT NULL
-                    THEN format('Location: %s', me.location)
-                END,
-
-                -- Ownership / organizational context
-                CASE
-                    WHEN me.owner_team IS NOT NULL
-                    THEN format('Owned by team: %s', me.owner_team)
-                END
-
-            ),
-            -- Collapse multiple spaces/newlines into clean text
-            '\s+',
-            ' ',
-            'g'
-        )
-    ) AS embedding_text,
-
-    -- Useful metadata for downstream jobs
-    me.updated_at
-
+    -- Concatenate fields into a natural language block
+    trim(regexp_replace(concat_ws(E'\n\n',
+        format('Event Name: %s', initcap(me.event_name)),
+        CASE WHEN me.event_description IS NOT NULL AND length(me.event_description) > 0 
+             THEN format('Description: %s', me.event_description) END,
+        format('Details: Type is %s via %s channel.', me.event_type, me.event_channel),
+        CASE WHEN me.target_audience IS NOT NULL 
+             THEN format('Target Audience: %s', me.target_audience) END,
+        CASE WHEN me.location IS NOT NULL 
+             THEN format('Location: %s', me.location) END
+    ), '\s+', ' ', 'g')) AS embedding_text
 FROM marketing_event me
-WHERE
-    -- Only embed events that make semantic sense
-    me.status <> 'cancelled';
+WHERE me.status <> 'cancelled';

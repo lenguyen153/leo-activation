@@ -1,10 +1,70 @@
 fastapi
+# Web framework for building high-performance REST / async APIs
+# Used for LEO Activation & CDP service endpoints
+
+fastapi-pagination
+# Pagination utilities for FastAPI, standardized limit/offset and cursor-based pagination
+
 uvicorn
+# ASGI server to run FastAPI
+# Handles async IO, WebSockets, and high concurrency
+
 transformers
+# Hugging Face library for LLMs and NLP models
+# Used for local inference, embeddings, or model experimentation
+
 torch
+# PyTorch backend required by transformers
+# Provides tensor computation and GPU acceleration
+
 huggingface_hub
+# Access models, tokenizers, and configs from Hugging Face Hub
+# Handles authentication and model versioning
+
 python-dotenv
+# Loads environment variables from .env files
+# Keeps secrets and configs out of source code
+
 requests
+# Simple HTTP client for calling external APIs
+# Used for webhooks, third-party services, or legacy APIs
+
 pydantic
+# Data validation and serialization
+# Core to FastAPI request/response models and config schemas
+
 accelerate
+# Hugging Face utility for efficient model loading and inference
+# Helps with multi-GPU, mixed precision, and memory optimization
+
 google-genai
+# Google Gemini SDK (latest)
+# Used for LLM reasoning, function calling, and embeddings
+
+openai
+# OpenAI API client
+# Used for GPT-4, GPT-3.5, embeddings, and other OpenAI services
+
+psycopg[binary]
+# PostgreSQL driver (psycopg v3)
+# High-performance, async-friendly DB access
+
+pgvector
+# PostgreSQL extension client for vector embeddings
+# Enables semantic search and similarity queries in Postgres
+
+sqlalchemy
+# ORM and SQL toolkit
+# Used for schema management, migrations, and complex queries
+
+python-arango
+# ArangoDB driver
+# Used for graph + document data (journeys, relationships, identity graphs)
+
+celery[redis]
+# Distributed task queue with Redis as broker
+# Used for async jobs: embeddings, campaign execution, batch processing
+
+redis
+# In-memory data store
+# Used for caching, rate limiting, Celery broker, and ephemeral state
