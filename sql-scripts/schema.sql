@@ -1,354 +1,590 @@
 -- ============================================================
--- AI-Driven Marketing Automation – Core Data Schema
--- PostgreSQL 16
--- Status: Production Ready
+-- LEO Activation – Core Database Schema
+-- PostgreSQL 15+ / 16
+-- Status: Production-Approved (AI-native, Multi-tenant)
 -- ============================================================
 
--- =========================
--- 1. Required Extensions
--- =========================
--- crypto: For gen_random_uuid() and hashing functions
-CREATE EXTENSION IF NOT EXISTS pgcrypto;
--- vector: For AI embeddings (OpenAI/Llama)
-CREATE EXTENSION IF NOT EXISTS vector;
--- citext: For case-insensitive email storage
-CREATE EXTENSION IF NOT EXISTS citext;
 
 -- =========================
--- 2. Utility Functions
+-- 1. REQUIRED EXTENSIONS
 -- =========================
--- Generic function to auto-update 'updated_at' columns
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+CREATE EXTENSION IF NOT EXISTS vector;
+CREATE EXTENSION IF NOT EXISTS citext;
+
+
+-- =========================
+-- 2. SHARED UTILITIES
+-- =========================
+
+-- Auto-update updated_at
 CREATE OR REPLACE FUNCTION update_timestamp()
 RETURNS TRIGGER AS $$
 BEGIN
-    NEW.updated_at = now();
+    NEW.updated_at := now();
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
+
 -- =========================
--- 3. Tenant Table
+-- 3. TENANT
 -- =========================
 CREATE TABLE IF NOT EXISTS tenant (
     tenant_id   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_name TEXT NOT NULL,
-    status      TEXT DEFAULT 'active', -- useful for soft bans
+    status      TEXT DEFAULT 'active',
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE TRIGGER trg_tenant_updated_at
-BEFORE UPDATE ON tenant
-FOR EACH ROW EXECUTE FUNCTION update_timestamp();
-
--- ============================================================
--- 4. CDP Profiles
--- ============================================================
--- Central table for customer data.
--- Uses JSONB for flexible schema evolution (traits, custom fields).
--- ============================================================
-
-CREATE TABLE IF NOT EXISTS cdp_profiles (
-    -- Multi-tenancy Isolation
-    tenant_id                UUID NOT NULL REFERENCES tenant(tenant_id) ON DELETE CASCADE,
-    
-    -- Identity
-    profile_id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    ext_id                   TEXT, -- External ID from CRM/ERP
-    
-    -- Contact Info (Case Insensitive Email)
-    email                    CITEXT,
-    landline_number          TEXT,
-    mobile_number            TEXT,
-    whatsapp_number          TEXT,
-    zalo_number              TEXT,
-    sms_number               TEXT,
-
-    -- Personal Info
-    first_name               TEXT,
-    last_name                TEXT,
-    job_title                TEXT,
-    company_name             TEXT,
-    date_of_birth            DATE,
-
-    -- social profiles
-    linkedin_url             TEXT,
-    facebook_url             TEXT,
-    youtube_url             TEXT,
-    tiktok_url             TEXT,
-    
-    -- Metadata
-    contact_owner            TEXT,
-    contact_timezone         TEXT,
-
-    -- Flexible Data Structures
-    working_companies        JSONB, -- e.g. [{ "name": "Corp A", "role": "CEO" }]
-    
-    -- Segmentation
-    segments                 JSONB NOT NULL DEFAULT '[]'::jsonb,
-    data_labels              JSONB NOT NULL DEFAULT '[]'::jsonb,
-    data_journey_maps        JSONB NOT NULL DEFAULT '[]'::jsonb,
-
-    -- Commercial Metrics
-    total_lead_score         INTEGER DEFAULT 0,
-    clv_score                NUMERIC(12,2) DEFAULT 0.00,
-    total_transaction_value  NUMERIC(18,2) DEFAULT 0.00,
-
-    -- Compliance (GDPR/CCPA)
-    opt_in                   BOOLEAN DEFAULT FALSE,
-    double_opt_in            BOOLEAN DEFAULT FALSE,
-    opt_in_metadata          JSONB,
-
-    -- Event Tracking
-    last_event_date          DATE,
-    
-    -- Catch-all for unstructured traits
-    raw_attributes           JSONB NOT NULL DEFAULT '{}'::jsonb,
-
-    -- Audit
-    created_at               TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at               TIMESTAMPTZ NOT NULL DEFAULT now(),
-
-    -- Constraints
-    -- Ensure external ID is unique per tenant
-    CONSTRAINT uq_cdp_profile_ext UNIQUE (tenant_id, ext_id)
-);
-
--- CDP Triggers
-CREATE TRIGGER trg_cdp_profiles_updated_at
-BEFORE UPDATE ON cdp_profiles
-FOR EACH ROW EXECUTE FUNCTION update_timestamp();
-
--- CDP Indexes
--- Standard B-Tree for lookups
-CREATE INDEX IF NOT EXISTS idx_cdp_profiles_email ON cdp_profiles (tenant_id, email);
-CREATE INDEX IF NOT EXISTS idx_cdp_profiles_mobile ON cdp_profiles (tenant_id, mobile_number);
-
--- GIN Indexes for high-speed JSONB querying
--- jsonb_path_ops is faster but only supports @> operator (contains)
-CREATE INDEX IF NOT EXISTS idx_cdp_profiles_segments 
-ON cdp_profiles USING GIN (segments jsonb_path_ops);
-
-CREATE INDEX IF NOT EXISTS idx_cdp_profiles_labels 
-ON cdp_profiles USING GIN (leo_data_labels, cdp_data_labels);
-
-CREATE INDEX IF NOT EXISTS idx_cdp_profiles_raw 
-ON cdp_profiles USING GIN (raw_attributes);
-
--- CDP RLS
-ALTER TABLE cdp_profiles ENABLE ROW LEVEL SECURITY;
-
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE polname = 'cdp_profiles_tenant_rls') THEN
-        CREATE POLICY cdp_profiles_tenant_rls ON cdp_profiles
-        USING (tenant_id = current_setting('app.current_tenant_id', true)::uuid)
-        WITH CHECK (tenant_id = current_setting('app.current_tenant_id', true)::uuid);
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_trigger
+        WHERE tgname = 'trg_tenant_updated_at'
+          AND tgrelid = 'tenant'::regclass
+    ) THEN
+        CREATE TRIGGER trg_tenant_updated_at
+        BEFORE UPDATE ON tenant
+        FOR EACH ROW
+        EXECUTE FUNCTION update_timestamp();
     END IF;
 END $$;
 
+
+
 -- ============================================================
--- 5. Marketing Event (Partitioned)
+-- 4. CDP PROFILES
 -- ============================================================
--- Partitioned by Hash(tenant_id) to distribute high-volume write load.
--- Note: Queries MUST include tenant_id to be efficient.
+CREATE TABLE IF NOT EXISTS cdp_profiles (
+    tenant_id       UUID NOT NULL REFERENCES tenant(tenant_id) ON DELETE CASCADE,
+    profile_id      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    ext_id          TEXT,
+
+    email           CITEXT,
+    mobile_number   TEXT,
+    zalo_number     TEXT,
+
+    first_name      TEXT,
+    last_name       TEXT,
+    job_title       TEXT,
+    company_name    TEXT,
+
+    segments        JSONB NOT NULL DEFAULT '[]'::jsonb,
+    data_labels     JSONB NOT NULL DEFAULT '[]'::jsonb,
+
+    -- Denormalized, append-only snapshot refs
+    segment_snapshots JSONB NOT NULL DEFAULT '[]'::jsonb,
+
+    raw_attributes  JSONB NOT NULL DEFAULT '{}'::jsonb,
+
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    CONSTRAINT uq_cdp_profile_ext UNIQUE (tenant_id, ext_id)
+);
+
+
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_trigger
+        WHERE tgname = 'trg_cdp_profiles_updated_at'
+          AND tgrelid = 'cdp_profiles'::regclass
+    ) THEN
+        CREATE TRIGGER trg_cdp_profiles_updated_at
+        BEFORE UPDATE ON cdp_profiles
+        FOR EACH ROW EXECUTE FUNCTION update_timestamp();
+    END IF;
+END $$;
+
+
+
+-- Append-only guard for segment_snapshots
+CREATE OR REPLACE FUNCTION prevent_snapshot_removal()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF jsonb_array_length(NEW.segment_snapshots)
+       < jsonb_array_length(OLD.segment_snapshots) THEN
+        RAISE EXCEPTION 'segment_snapshots is append-only';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_trigger
+        WHERE tgname = 'trg_prevent_snapshot_removal'
+          AND tgrelid = 'cdp_profiles'::regclass
+    ) THEN
+        CREATE TRIGGER trg_prevent_snapshot_removal
+        BEFORE UPDATE ON cdp_profiles
+        FOR EACH ROW
+        EXECUTE FUNCTION prevent_snapshot_removal();
+    END IF;
+END $$;
+
+
+-- Indexes
+CREATE INDEX IF NOT EXISTS idx_cdp_profiles_email
+ON cdp_profiles (tenant_id, email);
+
+CREATE INDEX IF NOT EXISTS idx_cdp_profiles_segments
+ON cdp_profiles USING GIN (segments jsonb_path_ops);
+
+CREATE INDEX IF NOT EXISTS idx_cdp_profiles_segment_snapshots
+ON cdp_profiles USING GIN (segment_snapshots jsonb_path_ops);
+
+CREATE INDEX IF NOT EXISTS idx_cdp_profiles_raw
+ON cdp_profiles USING GIN (raw_attributes);
+
+-- RLS
+ALTER TABLE cdp_profiles ENABLE ROW LEVEL SECURITY;
+
+-- Create RLS policy if not exists
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_policies
+        WHERE policyname = 'cdp_profiles_tenant_rls'
+          AND schemaname = current_schema()
+          AND tablename = 'cdp_profiles'
+    ) THEN
+        CREATE POLICY cdp_profiles_tenant_rls
+        ON cdp_profiles
+        USING (
+            tenant_id = current_setting('app.current_tenant_id', true)::uuid
+        )
+        WITH CHECK (
+            tenant_id = current_setting('app.current_tenant_id', true)::uuid
+        );
+    END IF;
+END $$;
+
+
+
+
+-- ============================================================
+-- 5. CAMPAIGN (STRATEGY)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS campaign (
+    tenant_id      UUID NOT NULL REFERENCES tenant(tenant_id) ON DELETE CASCADE,
+    campaign_id    UUID NOT NULL DEFAULT gen_random_uuid(),
+
+    campaign_code  TEXT NOT NULL,
+    campaign_name  TEXT NOT NULL,
+
+    objective      TEXT,
+    status         TEXT NOT NULL DEFAULT 'active',
+
+    start_at       TIMESTAMPTZ,
+    end_at         TIMESTAMPTZ,
+
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    CONSTRAINT pk_campaign PRIMARY KEY (tenant_id, campaign_id),
+    CONSTRAINT uq_campaign_code UNIQUE (tenant_id, campaign_code),
+    CONSTRAINT chk_campaign_time CHECK (
+        end_at IS NULL OR start_at IS NULL OR end_at >= start_at
+    )
+);
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_trigger
+        WHERE tgname = 'trg_campaign_updated_at'
+          AND tgrelid = 'campaign'::regclass
+    ) THEN
+        CREATE TRIGGER trg_campaign_updated_at
+        BEFORE UPDATE ON campaign
+        FOR EACH ROW
+        EXECUTE FUNCTION update_timestamp();
+    END IF;
+END $$;
+
+
+ALTER TABLE campaign ENABLE ROW LEVEL SECURITY;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_policies
+        WHERE policyname = 'campaign_tenant_rls'
+          AND schemaname = current_schema()
+          AND tablename = 'campaign'
+    ) THEN
+        CREATE POLICY campaign_tenant_rls
+        ON campaign
+        USING (
+            tenant_id = current_setting('app.current_tenant_id', true)::uuid
+        )
+        WITH CHECK (
+            tenant_id = current_setting('app.current_tenant_id', true)::uuid
+        );
+    END IF;
+END $$;
+
+
+
+-- ============================================================
+-- 6. MARKETING EVENT (EXECUTION DEFINITION)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS marketing_event (
-    tenant_id          UUID NOT NULL REFERENCES tenant(tenant_id) ON DELETE CASCADE,
-    
-    -- Deterministic Hash ID
-    event_id           TEXT NOT NULL, 
+    tenant_id      UUID NOT NULL REFERENCES tenant(tenant_id) ON DELETE CASCADE,
+    event_id       TEXT NOT NULL,
 
-    -- Content
-    event_name         TEXT NOT NULL,
-    event_description  TEXT,
-    event_type         TEXT NOT NULL,   -- e.g. 'webinar', 'email'
-    event_channel      TEXT NOT NULL,   -- e.g. 'online', 'in-person'
+    campaign_id    UUID,
 
-    -- Timing
-    start_at           TIMESTAMPTZ NOT NULL,
-    end_at             TIMESTAMPTZ NOT NULL,
-    timezone           TEXT NOT NULL DEFAULT 'UTC',
+    event_name     TEXT NOT NULL,
+    event_type     TEXT NOT NULL,
+    event_channel  TEXT NOT NULL,
 
-    -- Details
-    location           TEXT,
-    event_url          TEXT,
-    campaign_code      TEXT,
-    target_audience    TEXT,
-    target_segments    JSONB NOT NULL DEFAULT '[]'::jsonb,
-    media_assets      JSONB NOT NULL DEFAULT '[]'::jsonb,
-    
-    -- Finance
-    budget_amount      NUMERIC(12,2),
-    currency           CHAR(3) DEFAULT 'USD',
+    start_at       TIMESTAMPTZ NOT NULL,
+    end_at         TIMESTAMPTZ NOT NULL,
 
-    -- Ownership
-    owner_team         TEXT,
-    owner_email        TEXT,
+    status         TEXT NOT NULL DEFAULT 'planned',
 
-    -- Lifecycle
-    status             TEXT NOT NULL DEFAULT 'planned',
+    embedding      VECTOR(1536),
+    embedding_status TEXT NOT NULL DEFAULT 'pending',
 
-    -- AI / Vector Search
-    -- 1536 is standard for OpenAI text-embedding-3-small/ada-002
-    embedding          VECTOR(1536),
-    embedding_status   TEXT NOT NULL DEFAULT 'pending', -- pending, processed, failed
-    embedding_updated_at TIMESTAMPTZ,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
 
-    created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
-
-    -- Partition Key must be part of Primary Key
     CONSTRAINT pk_marketing_event PRIMARY KEY (tenant_id, event_id),
-    CONSTRAINT chk_event_time CHECK (end_at >= start_at)
 
+    CONSTRAINT fk_marketing_event_campaign
+        FOREIGN KEY (tenant_id, campaign_id)
+        REFERENCES campaign (tenant_id, campaign_id)
+        ON DELETE SET NULL,
+
+    CONSTRAINT chk_event_time CHECK (end_at >= start_at)
 ) PARTITION BY HASH (tenant_id);
 
--- Create Partitions (p0 to p15)
+-- Partitions
 DO $$
 BEGIN
     FOR i IN 0..15 LOOP
         EXECUTE format(
-            'CREATE TABLE IF NOT EXISTS marketing_event_p%s 
-             PARTITION OF marketing_event 
-             FOR VALUES WITH (MODULUS 16, REMAINDER %s);', 
+            'CREATE TABLE IF NOT EXISTS marketing_event_p%s
+             PARTITION OF marketing_event
+             FOR VALUES WITH (MODULUS 16, REMAINDER %s);',
             i, i
         );
     END LOOP;
 END $$;
 
--- Event ID Generator (Deterministic Hash)
+-- Deterministic event_id
 CREATE OR REPLACE FUNCTION generate_marketing_event_id()
 RETURNS TRIGGER AS $$
 BEGIN
-    -- We use sha256 to create a deterministic ID based on content + time + tenant
-    -- This prevents exact duplicates and creates a consistent ID for external ref
-    NEW.event_id := encode(digest(lower(concat_ws('||',
-            NEW.tenant_id::text,
-            NEW.event_name,
-            NEW.event_type,
-            NEW.event_channel,
-            COALESCE(NEW.campaign_code, ''),
-            -- Use COALESCE on created_at in case it hasn't settled yet
-            COALESCE(NEW.created_at, now())::text 
-        )), 'sha256'), 'hex');
-    
-    -- Ensure updated_at is set
+    NEW.event_id := encode(
+        digest(
+            lower(concat_ws('||',
+                NEW.tenant_id::text,
+                NEW.event_name,
+                NEW.event_type,
+                NEW.event_channel,
+                COALESCE(NEW.created_at, now())::text
+            )),
+            'sha256'
+        ),
+        'hex'
+    );
     NEW.updated_at := now();
-    
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
--- Event Triggers
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_event_hash') THEN
-        CREATE TRIGGER trg_event_hash
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_trigger
+        WHERE tgname = 'trg_marketing_event_hash'
+          AND tgrelid = 'marketing_event'::regclass
+    ) THEN
+        CREATE TRIGGER trg_marketing_event_hash
         BEFORE INSERT ON marketing_event
-        FOR EACH ROW EXECUTE FUNCTION generate_marketing_event_id();
-    END IF;
-    
-    -- Separate updated_at trigger for updates
-    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_event_updated_at') THEN
-        CREATE TRIGGER trg_event_updated_at
-        BEFORE UPDATE ON marketing_event
-        FOR EACH ROW EXECUTE FUNCTION update_timestamp();
+        FOR EACH ROW
+        EXECUTE FUNCTION generate_marketing_event_id();
     END IF;
 END $$;
 
--- Event Indexes
-CREATE INDEX IF NOT EXISTS idx_event_lookup ON marketing_event (tenant_id, status);
-CREATE INDEX IF NOT EXISTS idx_event_timeline ON marketing_event (tenant_id, start_at);
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_trigger
+        WHERE tgname = 'trg_marketing_event_updated_at'
+          AND tgrelid = 'marketing_event'::regclass
+    ) THEN
+        CREATE TRIGGER trg_marketing_event_updated_at
+        BEFORE UPDATE ON marketing_event
+        FOR EACH ROW
+        EXECUTE FUNCTION update_timestamp();
+    END IF;
+END $$;
 
--- VECTOR INDEX (HNSW)
--- Changed from IVFFLAT to HNSW. HNSW is better for:
--- 1. Real-time inserts (no training step required).
--- 2. Performance on smaller datasets (starts working immediately).
--- 3. Robustness (IVFFLAT yields 0 results if built on empty table).
-CREATE INDEX IF NOT EXISTS idx_event_embedding 
-ON marketing_event USING hnsw (embedding vector_cosine_ops);
 
--- Event RLS
+CREATE INDEX IF NOT EXISTS idx_marketing_event_status
+ON marketing_event (tenant_id, status);
+
+-- NOTE: HNSW indexes SHOULD be created per-partition in production
+
 ALTER TABLE marketing_event ENABLE ROW LEVEL SECURITY;
 
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE polname = 'marketing_event_tenant_rls') THEN
-        CREATE POLICY marketing_event_tenant_rls ON marketing_event
-        USING (tenant_id = current_setting('app.current_tenant_id', true)::uuid)
-        WITH CHECK (tenant_id = current_setting('app.current_tenant_id', true)::uuid);
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_policies
+        WHERE policyname = 'marketing_event_tenant_rls'
+          AND schemaname = current_schema()
+          AND tablename = 'marketing_event'
+    ) THEN
+        CREATE POLICY marketing_event_tenant_rls
+        ON marketing_event
+        USING (
+            tenant_id = current_setting('app.current_tenant_id', true)::uuid
+        )
+        WITH CHECK (
+            tenant_id = current_setting('app.current_tenant_id', true)::uuid
+        );
     END IF;
 END $$;
 
--- =========================
--- 6. Embedding Job Queue
--- =========================
--- Simple table to act as a queue for Python/Node workers to pick up 
--- text and generate embeddings.
-CREATE TABLE IF NOT EXISTS embedding_job (
-    job_id      BIGSERIAL PRIMARY KEY,
-    tenant_id   UUID NOT NULL,
-    event_id    TEXT NOT NULL,
-    status      TEXT NOT NULL DEFAULT 'pending', -- pending, processing, completed, failed
-    attempts    INTEGER DEFAULT 0,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-    locked_at   TIMESTAMPTZ -- used for concurrency locking
+
+
+-- ============================================================
+-- 7. SEGMENT SNAPSHOT (IMMUTABLE METADATA)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS segment_snapshot (
+    tenant_id        UUID NOT NULL REFERENCES tenant(tenant_id) ON DELETE CASCADE,
+    snapshot_id      UUID NOT NULL DEFAULT gen_random_uuid(),
+
+    segment_name     TEXT NOT NULL,
+    segment_version  TEXT,
+    snapshot_reason  TEXT,
+
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    CONSTRAINT pk_segment_snapshot
+        PRIMARY KEY (tenant_id, snapshot_id)
 );
 
--- Index for workers to find pending jobs quickly
-CREATE INDEX IF NOT EXISTS idx_embedding_job_queue 
-ON embedding_job (status, created_at) 
-WHERE status = 'pending';
-
--- Trigger to Enqueue Jobs
-CREATE OR REPLACE FUNCTION enqueue_embedding_job()
-RETURNS TRIGGER AS $$
-BEGIN
-    -- Only enqueue if relevant fields changed
-    IF (TG_OP = 'INSERT') OR 
-       (NEW.event_name IS DISTINCT FROM OLD.event_name) OR 
-       (NEW.event_description IS DISTINCT FROM OLD.event_description) THEN
-       
-       INSERT INTO embedding_job (tenant_id, event_id)
-       VALUES (NEW.tenant_id, NEW.event_id);
-       
-       -- Reset embedding status on the main table
-       NEW.embedding_status := 'pending';
-    END IF;
-    
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
+ALTER TABLE segment_snapshot ENABLE ROW LEVEL SECURITY;
 
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_enqueue_embedding') THEN
-        CREATE TRIGGER trg_enqueue_embedding
-        BEFORE INSERT OR UPDATE ON marketing_event
-        FOR EACH ROW EXECUTE FUNCTION enqueue_embedding_job();
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_policies
+        WHERE policyname = 'segment_snapshot_tenant_rls'
+          AND schemaname = current_schema()
+          AND tablename = 'segment_snapshot'
+    ) THEN
+        CREATE POLICY segment_snapshot_tenant_rls
+        ON segment_snapshot
+        USING (
+            tenant_id = current_setting('app.current_tenant_id', true)::uuid
+        )
+        WITH CHECK (
+            tenant_id = current_setting('app.current_tenant_id', true)::uuid
+        );
     END IF;
 END $$;
 
+
+
 -- ============================================================
--- 7. Embedding View (Context Prep)
+-- 8. SEGMENT SNAPSHOT MEMBERS (SCALE SAFE)
 -- ============================================================
--- Pre-formats the text so the AI worker just queries this view
+CREATE TABLE IF NOT EXISTS segment_snapshot_member (
+    tenant_id    UUID NOT NULL REFERENCES tenant(tenant_id) ON DELETE CASCADE,
+    snapshot_id  UUID NOT NULL,
+    profile_id   UUID NOT NULL,
+
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    CONSTRAINT pk_segment_snapshot_member
+        PRIMARY KEY (tenant_id, snapshot_id, profile_id),
+
+    CONSTRAINT fk_snapshot_member_snapshot
+        FOREIGN KEY (tenant_id, snapshot_id)
+        REFERENCES segment_snapshot (tenant_id, snapshot_id)
+        ON DELETE CASCADE,
+
+    CONSTRAINT fk_snapshot_member_profile
+        FOREIGN KEY (profile_id)
+        REFERENCES cdp_profiles (profile_id)
+        ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_snapshot_member_profile
+ON segment_snapshot_member (tenant_id, profile_id);
+
+ALTER TABLE segment_snapshot_member ENABLE ROW LEVEL SECURITY;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_policies
+        WHERE policyname = 'segment_snapshot_member_tenant_rls'
+          AND schemaname = current_schema()
+          AND tablename = 'segment_snapshot_member'
+    ) THEN
+        CREATE POLICY segment_snapshot_member_tenant_rls
+        ON segment_snapshot_member
+        USING (
+            tenant_id = current_setting('app.current_tenant_id', true)::uuid
+        )
+        WITH CHECK (
+            tenant_id = current_setting('app.current_tenant_id', true)::uuid
+        );
+    END IF;
+END $$;
+
+
+
 -- ============================================================
-CREATE OR REPLACE VIEW event_content_for_embedding AS
-SELECT 
-    me.tenant_id,
-    me.event_id,
-    -- Concatenate fields into a natural language block
-    trim(regexp_replace(concat_ws(E'\n\n',
-        format('Event Name: %s', initcap(me.event_name)),
-        CASE WHEN me.event_description IS NOT NULL AND length(me.event_description) > 0 
-             THEN format('Description: %s', me.event_description) END,
-        format('Details: Type is %s via %s channel.', me.event_type, me.event_channel),
-        CASE WHEN me.target_audience IS NOT NULL 
-             THEN format('Target Audience: %s', me.target_audience) END,
-        CASE WHEN me.location IS NOT NULL 
-             THEN format('Location: %s', me.location) END
-    ), '\s+', ' ', 'g')) AS embedding_text
-FROM marketing_event me
-WHERE me.status <> 'cancelled';
+-- 9. AGENT TASK (AI DECISION TRACE)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS agent_task (
+    tenant_id    UUID NOT NULL REFERENCES tenant(tenant_id) ON DELETE CASCADE,
+    task_id      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+    agent_name   TEXT NOT NULL,
+    task_type    TEXT NOT NULL,
+    task_goal    TEXT,
+
+    campaign_id  UUID,
+    event_id     TEXT,
+    snapshot_id  UUID,
+
+    reasoning_summary TEXT,
+    reasoning_trace   JSONB,
+
+    status       TEXT NOT NULL DEFAULT 'pending',
+    error_message TEXT,
+
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    completed_at TIMESTAMPTZ,
+
+    CONSTRAINT fk_agent_task_campaign
+        FOREIGN KEY (tenant_id, campaign_id)
+        REFERENCES campaign (tenant_id, campaign_id)
+        ON DELETE SET NULL,
+
+    CONSTRAINT fk_agent_task_event
+        FOREIGN KEY (tenant_id, event_id)
+        REFERENCES marketing_event (tenant_id, event_id)
+        ON DELETE SET NULL,
+
+    CONSTRAINT fk_agent_task_snapshot
+        FOREIGN KEY (tenant_id, snapshot_id)
+        REFERENCES segment_snapshot (tenant_id, snapshot_id)
+        ON DELETE SET NULL
+);
+
+ALTER TABLE agent_task ENABLE ROW LEVEL SECURITY;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_policies
+        WHERE policyname = 'agent_task_tenant_rls'
+          AND schemaname = current_schema()
+          AND tablename = 'agent_task'
+    ) THEN
+        CREATE POLICY agent_task_tenant_rls
+        ON agent_task
+        USING (
+            tenant_id = current_setting('app.current_tenant_id', true)::uuid
+        )
+        WITH CHECK (
+            tenant_id = current_setting('app.current_tenant_id', true)::uuid
+        );
+    END IF;
+END $$;
+
+
+
+-- ============================================================
+-- 10. DELIVERY LOG (EXECUTION TRUTH)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS delivery_log (
+    tenant_id     UUID NOT NULL REFERENCES tenant(tenant_id) ON DELETE CASCADE,
+    delivery_id   BIGSERIAL PRIMARY KEY,
+
+    campaign_id   UUID,
+    event_id      TEXT NOT NULL,
+    profile_id    UUID NOT NULL,
+    snapshot_id   UUID,
+
+    channel       TEXT NOT NULL,
+    destination   TEXT,
+
+    delivery_status TEXT NOT NULL,
+    provider_response JSONB,
+
+    sent_at       TIMESTAMPTZ,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    CONSTRAINT fk_delivery_event
+        FOREIGN KEY (tenant_id, event_id)
+        REFERENCES marketing_event (tenant_id, event_id)
+        ON DELETE CASCADE,
+
+    CONSTRAINT fk_delivery_profile
+        FOREIGN KEY (profile_id)
+        REFERENCES cdp_profiles (profile_id)
+        ON DELETE CASCADE,
+
+    CONSTRAINT fk_delivery_snapshot
+        FOREIGN KEY (tenant_id, snapshot_id)
+        REFERENCES segment_snapshot (tenant_id, snapshot_id)
+        ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_delivery_log_event
+ON delivery_log (tenant_id, event_id, delivery_status);
+
+CREATE INDEX IF NOT EXISTS idx_delivery_log_profile
+ON delivery_log (tenant_id, profile_id);
+
+ALTER TABLE delivery_log ENABLE ROW LEVEL SECURITY;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_policies
+        WHERE policyname = 'delivery_log_tenant_rls'
+          AND schemaname = current_schema()
+          AND tablename = 'delivery_log'
+    ) THEN
+        CREATE POLICY delivery_log_tenant_rls
+        ON delivery_log
+        USING (
+            tenant_id = current_setting('app.current_tenant_id', true)::uuid
+        )
+        WITH CHECK (
+            tenant_id = current_setting('app.current_tenant_id', true)::uuid
+        );
+    END IF;
+END $$;
+-- ============================================================
