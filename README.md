@@ -2,9 +2,7 @@
 
 LEO Activation is an intelligent backend service designed to bridge the gap between complex Customer Data Platforms (CDP) and marketing teams. By leveraging **Google's FunctionGemma-270M**, it provides a conversational AI interface for the [LEO CDP Framework](https://github.com/trieu/leo-cdp-framework), allowing users to manage segments and trigger omnichannel marketing activations through natural language.
 
-![Screenshot: LEO Activation UI](screenshot.png)
-
-*Screenshot: chat demo and activation flow.*
+![Screenshot: LEO Activation Framework](leo-activation-framework.png)
 
 ## 🚀 Overview
 
@@ -167,6 +165,10 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 ## 💬 Usage Example
+
+![Screenshot: LEO Activation UI](screenshot.png)
+
+*Screenshot: chat demo and activation flow.*
 
 The platform expects an **Essential System Prompt** to activate the model's function-calling logic:
 *`"You are a model that can do function calling with the following functions"`*.
