@@ -587,4 +587,46 @@ BEGIN
         );
     END IF;
 END $$;
+
+
 -- ============================================================
+-- 6. Embedding Job Queue
+-- ============================================================
+CREATE TABLE IF NOT EXISTS embedding_job (
+    job_id      BIGSERIAL PRIMARY KEY,
+    tenant_id   UUID NOT NULL,
+    event_id    TEXT NOT NULL,
+    status      TEXT NOT NULL DEFAULT 'pending',
+    attempts    INTEGER DEFAULT 0,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    locked_at   TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_embedding_job_queue
+ON embedding_job (status, created_at)
+WHERE status = 'pending';
+
+CREATE OR REPLACE FUNCTION enqueue_embedding_job()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF TG_OP = 'INSERT'
+       OR NEW.event_name IS DISTINCT FROM OLD.event_name
+       OR NEW.event_description IS DISTINCT FROM OLD.event_description THEN
+
+        INSERT INTO embedding_job (tenant_id, event_id)
+        VALUES (NEW.tenant_id, NEW.event_id);
+
+        NEW.embedding_status := 'pending';
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_enqueue_embedding
+BEFORE INSERT OR UPDATE ON marketing_event
+FOR EACH ROW EXECUTE FUNCTION enqueue_embedding_job();
+
+-- ============================================================
+
+

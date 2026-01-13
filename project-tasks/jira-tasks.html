@@ -28,12 +28,12 @@ section.final-slide h2 { font-size: 28px; }
 <header>LEO Activation (POC) • Sprint Plan (VN)</header>
 
 <h1 id="leo-activation-platform">LEO Activation Platform</h1>
-<h2 id="k%E1%BA%BF-ho%E1%BA%A1ch-tri%E1%BB%83n-khai-poc-12-ng%C3%A0y">Kế Hoạch Triển Khai POC 12 Ngày</h2>
-<p><strong>Mục tiêu:</strong> Xây dựng &quot;Bộ não &amp; Cơ bắp&quot; AI-first cho LEO CDP.<br />
-<strong>Core Tech:</strong> FunctionGemma (AI), PostgreSQL 16 (Core), Celery (Async).<br />
-<strong>Ràng buộc:</strong> 12 ngày phải có Demo.</p>
+<h2 id="k%E1%BA%BF-ho%E1%BA%A1ch-tri%E1%BB%83n-khai-poc-18-ng%C3%A0y">Kế Hoạch Triển Khai POC 18 Ngày</h2>
+<p><strong>OKR:</strong> Build &quot;AI-driven Activation Engine&quot; with data from CDP<br />
+<strong>Core Tech:</strong> FastAPI, PostgreSQL 16 (Core Database), PGVector, Apache AGE and Celery (Async),<br />
+<strong>AI Models:</strong> Online Model: Gemini 2.5 Flash-Lite,  Offline Model: FunctionGemma</p>
 <p><strong>Owner:</strong> Product &amp; Engineering<br />
-<strong>Ngày:</strong> 8/1/2026</p>
+<strong>Date:</strong> 6/1/2026</p>
 <blockquote>
 <p><strong>&quot;Code wins arguments. Ship it.&quot;</strong></p>
 </blockquote>
@@ -148,12 +148,12 @@ section.final-slide table { font-size: 18px; }
 section.final-slide h2 { font-size: 28px; }
 ;" data-marpit-pagination-total="22">
 <header>LEO Activation (POC) • Sprint Plan (VN)</header>
-<h2 id="timeline-sprint-12-ng%C3%A0y">Timeline Sprint (12 Ngày)</h2>
+<h2 id="timeline-sprint-18-ng%C3%A0y">Timeline Sprint (18 Ngày)</h2>
 <ul>
-<li><strong>Phase 1: Nền tảng (Ngày 1-3)</strong></li>
-<li><strong>Phase 2: Bộ não AI (Ngày 4-7)</strong></li>
-<li><strong>Phase 3: Cơ bắp thực thi (Ngày 8-10)</strong></li>
-<li><strong>Phase 4: Ổn định hóa (Ngày 11-12)</strong></li>
+<li><strong>Phase 1: Nền tảng (Ngày 1-4)</strong></li>
+<li><strong>Phase 2: AI Agents (Ngày 5-9)</strong></li>
+<li><strong>Phase 3: Activation Engine (Ngày 10-14)</strong></li>
+<li><strong>Phase 4: Ổn định hóa (Ngày 15-18)</strong></li>
 </ul>
 <footer>v1.0</footer>
 </section>
@@ -175,7 +175,7 @@ section.final-slide table { font-size: 18px; }
 section.final-slide h2 { font-size: 28px; }
 ;" data-marpit-pagination-total="22">
 <header>LEO Activation (POC) • Sprint Plan (VN)</header>
-<h1 id="phase-1-n%E1%BB%81n-t%E1%BA%A3ng-ng%C3%A0y-1-3">Phase 1: Nền tảng (Ngày 1-3)</h1>
+<h1 id="phase-1-n%E1%BB%81n-t%E1%BA%A3ng-ng%C3%A0y-1-4">Phase 1: Nền tảng (Ngày 1-4)</h1>
 <h2 id="m%E1%BB%A5c-ti%C3%AAu-c%E1%BA%A5u-tr%C3%BAc-database-chu%E1%BA%A9n-%C4%91%E1%BA%A7y-%C4%91%E1%BB%A7-v%C3%A0-tin-c%E1%BA%ADy-%C4%91%E1%BB%83-scale">Mục tiêu: Cấu trúc database chuẩn, đầy đủ và tin cậy để scale.</h2>
 <footer>v1.0</footer>
 </section>
@@ -237,7 +237,7 @@ section.final-slide h2 { font-size: 28px; }
 <header>LEO Activation (POC) • Sprint Plan (VN)</header>
 <h2 id="leo-activation-%E2%80%93-02-worker-%C4%91%E1%BB%93ng-b%E1%BB%99-d%E1%BB%AF-li%E1%BB%87u-arangodb-%E2%86%92-postgres">[LEO Activation – 02] Worker Đồng bộ Dữ liệu (ArangoDB → Postgres)</h2>
 <p><strong>WHY – Vì sao task này tồn tại?</strong><br />
-Activation runtime không được phụ thuộc GraphDB. Mọi quyết định phải chạy trên dữ liệu đã ổn định.</p>
+Activation runtime không được phụ thuộc CDP. Mọi quyết định phải chạy trên dữ liệu đã ổn định.</p>
 <p><strong>Mô tả:</strong><br />
 Xây dựng Celery worker để kéo dữ liệu profile từ LEO CDP ArangoDB và upsert vào bảng <code>cdp_profiles</code> của Activation.</p>
 <p><strong>Technical Tasks:</strong></p>
@@ -276,7 +276,7 @@ section.final-slide h2 { font-size: 28px; }
 <p><strong>WHY – Vì sao task này tồn tại?</strong><br />
 Không snapshot thì không audit được. Không audit thì không giải thích được.</p>
 <p><strong>Mô tả:</strong><br />
-Implement logic &quot;đóng băng&quot;. Khi campaign kích hoạt, hệ thống phải ghi lại chính xác ai đang ở trong segment tại thời điểm đó.</p>
+Implement logic &quot;segment snapshop&quot;. Khi campaign kích hoạt, hệ thống phải ghi lại chính xác ai đang ở trong segment tại thời điểm đó.</p>
 <p><strong>Technical Tasks:</strong></p>
 <ol>
 <li>API: <code>POST /snapshot/create</code>.</li>
@@ -309,7 +309,7 @@ section.final-slide table { font-size: 18px; }
 section.final-slide h2 { font-size: 28px; }
 ;" data-marpit-pagination-total="22">
 <header>LEO Activation (POC) • Sprint Plan (VN)</header>
-<h1 id="phase-2-b%E1%BB%99-n%C3%A3o-ai-ng%C3%A0y-4-7">Phase 2: Bộ não AI (Ngày 4-7)</h1>
+<h1 id="phase-2-ai-agents-ng%C3%A0y-5-9">Phase 2: AI Agents (Ngày 5-9)</h1>
 <h2 id="m%E1%BB%A5c-ti%C3%AAu-text-to-function--truy-v%E1%BA%BFt-quy%E1%BA%BFt-%C4%91%E1%BB%8Bnh">Mục tiêu: Text-to-Function &amp; Truy vết Quyết định.</h2>
 <footer>v1.0</footer>
 </section>
@@ -335,7 +335,7 @@ section.final-slide h2 { font-size: 28px; }
 <p><strong>WHY – Vì sao task này tồn tại?</strong><br />
 Marketing không viết code. AI phải dịch ngôn ngữ tự nhiên thành hành động có cấu trúc trong Python.</p>
 <p><strong>Mô tả:</strong><br />
-Deploy FunctionGemma model (qua API wrapper) để dịch intent marketing thành các function call có cấu trúc.<br />
+Deploy FunctionGemma model (qua API wrapper) để dịch <strong>intent marketing signals</strong> thành các function call có cấu trúc.<br />
 Đọc kỹ technical notes <a href="https://blog.google/innovation-and-ai/technology/developers-tools/functiongemma/">https://blog.google/innovation-and-ai/technology/developers-tools/functiongemma/</a></p>
 <p><strong>Technical Tasks:</strong></p>
 <ol>
@@ -406,7 +406,7 @@ section.final-slide table { font-size: 18px; }
 section.final-slide h2 { font-size: 28px; }
 ;" data-marpit-pagination-total="22">
 <header>LEO Activation (POC) • Sprint Plan (VN)</header>
-<h1 id="phase-3-c%C6%A1-b%E1%BA%AFp-th%E1%BB%B1c-thi-ng%C3%A0y-8-10">Phase 3: Cơ bắp thực thi (Ngày 8-10)</h1>
+<h1 id="phase-3-activation-engine-ng%C3%A0y-10-14">Phase 3: Activation Engine (Ngày 10-14)</h1>
 <footer>v1.0</footer>
 </section>
 </foreignObject></svg><svg data-marpit-svg="" viewBox="0 0 1280 720"><foreignObject width="1280" height="720"><section id="13" data-paginate="true" data-header="LEO Activation (POC) • Sprint Plan (VN)" data-footer="v1.0" data-theme="default" data-style="section { font-size: 22px; }
@@ -468,7 +468,7 @@ section.final-slide h2 { font-size: 28px; }
 <header>LEO Activation (POC) • Sprint Plan (VN)</header>
 <h2 id="leo-activation-%E2%80%93-07-channel-adapter-zalo-oa--email">[LEO Activation – 07] Channel Adapter: Zalo OA &amp; Email</h2>
 <p><strong>WHY – Vì sao task này tồn tại?</strong><br />
-Việt Nam = Zalo + Email. Không làm tốt thì demo không thuyết phục.</p>
+Việt Nam = Zalo + Email. Ở Việt Nam, Zalo và Email vẫn là kênh tiếp cận user phổ biến.</p>
 <p><strong>Mô tả:</strong><br />
 Implement các connector cụ thể cho thị trường Việt Nam.</p>
 <p><strong>Technical Tasks:</strong></p>
@@ -505,7 +505,7 @@ section.final-slide h2 { font-size: 28px; }
 <header>LEO Activation (POC) • Sprint Plan (VN)</header>
 <h2 id="leo-activation-%E2%80%93-08-channel-adapter-facebook-page">[LEO Activation – 08] Channel Adapter: Facebook Page</h2>
 <p><strong>WHY – Vì sao task này tồn tại?</strong><br />
-Facebook Page vẫn là kênh CSKH và remarketing quan trọng.</p>
+Facebook Page vẫn là kênh customer support và remarketing quan trọng.</p>
 <p><strong>Mô tả:</strong><br />
 Implement adapter gửi tin nhắn qua Facebook Page API, phục vụ các use case CSKH và campaign remarketing.</p>
 <p><strong>Technical Tasks:</strong></p>
@@ -543,7 +543,7 @@ section.final-slide h2 { font-size: 28px; }
 <header>LEO Activation (POC) • Sprint Plan (VN)</header>
 <h2 id="leo-activation-%E2%80%93-09-channel-adapter-push--telegram">[LEO Activation – 09] Channel Adapter: Push &amp; Telegram</h2>
 <p><strong>WHY – Vì sao task này tồn tại?</strong><br />
-Kênh realtime giúp người dùng cảm nhận hệ thống đang phản hồi ngay lập tức, không bị “trễ” hay “im lặng”.</p>
+Kênh realtime giúp người dùng cảm nhận hệ thống đang phản hồi ngay lập tức</p>
 <p><strong>Mô tả:</strong><br />
 Triển khai các kênh thông báo thời gian thực để gửi phản hồi nhanh cho người dùng ngay sau khi có quyết định activation.</p>
 <p><strong>Technical Tasks:</strong></p>
@@ -577,7 +577,7 @@ section.final-slide table { font-size: 18px; }
 section.final-slide h2 { font-size: 28px; }
 ;" data-marpit-pagination-total="22">
 <header>LEO Activation (POC) • Sprint Plan (VN)</header>
-<h1 id="phase-4-%E1%BB%95n-%C4%91%E1%BB%8Bnh-h%C3%B3a-ng%C3%A0y-11-12">Phase 4: Ổn định hóa (Ngày 11-12)</h1>
+<h1 id="phase-4-%E1%BB%95n-%C4%91%E1%BB%8Bnh-h%C3%B3a-ng%C3%A0y-15-18">Phase 4: Ổn định hóa (Ngày 15-18)</h1>
 <footer>v1.0</footer>
 </section>
 </foreignObject></svg><svg data-marpit-svg="" viewBox="0 0 1280 720"><foreignObject width="1280" height="720"><section id="18" data-paginate="true" data-header="LEO Activation (POC) • Sprint Plan (VN)" data-footer="v1.0" data-theme="default" data-style="section { font-size: 22px; }
@@ -795,27 +795,27 @@ section.final-slide h2 { font-size: 28px; }
 <tr>
 <td style="text-align:right">LEO Activation – 03</td>
 <td>Segment Snapshot Engine</td>
-<td><img class="emoji" draggable="false" alt="⬜" src="https://cdn.jsdelivr.net/gh/jdecked/twemoji@16.0.1/assets/svg/2b1c.svg" data-marp-twemoji=""/> Todo</td>
+<td><img class="emoji" draggable="false" alt="🟩" src="https://cdn.jsdelivr.net/gh/jdecked/twemoji@16.0.1/assets/svg/1f7e9.svg" data-marp-twemoji=""/> Done</td>
 </tr>
 <tr>
 <td style="text-align:right">LEO Activation – 04</td>
 <td>FunctionGemma Model Service</td>
-<td><img class="emoji" draggable="false" alt="🟦" src="https://cdn.jsdelivr.net/gh/jdecked/twemoji@16.0.1/assets/svg/1f7e6.svg" data-marp-twemoji=""/> In Progress</td>
+<td><img class="emoji" draggable="false" alt="🟩" src="https://cdn.jsdelivr.net/gh/jdecked/twemoji@16.0.1/assets/svg/1f7e9.svg" data-marp-twemoji=""/> Done</td>
 </tr>
 <tr>
 <td style="text-align:right">LEO Activation – 05</td>
 <td>Agent Task Orchestrator</td>
-<td><img class="emoji" draggable="false" alt="⬜" src="https://cdn.jsdelivr.net/gh/jdecked/twemoji@16.0.1/assets/svg/2b1c.svg" data-marp-twemoji=""/> Todo</td>
+<td><img class="emoji" draggable="false" alt="🟩" src="https://cdn.jsdelivr.net/gh/jdecked/twemoji@16.0.1/assets/svg/1f7e9.svg" data-marp-twemoji=""/> Done</td>
 </tr>
 <tr>
 <td style="text-align:right">LEO Activation – 06</td>
 <td>Unified Dispatcher &amp; Delivery Log</td>
-<td><img class="emoji" draggable="false" alt="⬜" src="https://cdn.jsdelivr.net/gh/jdecked/twemoji@16.0.1/assets/svg/2b1c.svg" data-marp-twemoji=""/> Todo</td>
+<td><img class="emoji" draggable="false" alt="🟦" src="https://cdn.jsdelivr.net/gh/jdecked/twemoji@16.0.1/assets/svg/1f7e6.svg" data-marp-twemoji=""/> In Progress</td>
 </tr>
 <tr>
 <td style="text-align:right">LEO Activation – 07</td>
 <td>Channel Adapter: Zalo OA &amp; Email</td>
-<td><img class="emoji" draggable="false" alt="🟦" src="https://cdn.jsdelivr.net/gh/jdecked/twemoji@16.0.1/assets/svg/1f7e6.svg" data-marp-twemoji=""/> In Progress</td>
+<td><img class="emoji" draggable="false" alt="🟩" src="https://cdn.jsdelivr.net/gh/jdecked/twemoji@16.0.1/assets/svg/1f7e9.svg" data-marp-twemoji=""/> Done</td>
 </tr>
 <tr>
 <td style="text-align:right">LEO Activation – 08</td>

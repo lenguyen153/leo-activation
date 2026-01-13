@@ -18,14 +18,14 @@ style: |
 
 # LEO Activation Platform
 
-## Kế Hoạch Triển Khai POC 12 Ngày
+## Kế Hoạch Triển Khai POC 18 Ngày
 
-**Mục tiêu:** Xây dựng "Bộ não & Cơ bắp" AI-first cho LEO CDP.  
-**Core Tech:** FunctionGemma (AI), PostgreSQL 16 (Core), Celery (Async).  
-**Ràng buộc:** 12 ngày phải có Demo.
+**OKR:** Build "AI-driven Activation Engine" with data from CDP  
+**Core Tech:** FastAPI, PostgreSQL 16 (Core Database), PGVector, Apache AGE and Celery (Async),
+**AI Models:** Online Model: Gemini 2.5 Flash-Lite,  Offline Model: FunctionGemma 
 
 **Owner:** Product & Engineering  
-**Ngày:** 8/1/2026
+**Date:** 6/1/2026
 
 > **"Code wins arguments. Ship it."**
 
@@ -87,12 +87,12 @@ Chỉ cần hiểu activation là một luồng xuyên suốt, không phải 1 s
 
 ---
 
-## Timeline Sprint (12 Ngày)
+## Timeline Sprint (18 Ngày)
 
-- **Phase 1: Nền tảng (Ngày 1-3)**
-- **Phase 2: Bộ não AI (Ngày 4-7)**
-- **Phase 3: Cơ bắp thực thi (Ngày 8-10)**
-- **Phase 4: Ổn định hóa (Ngày 11-12)**
+- **Phase 1: Nền tảng (Ngày 1-4)**
+- **Phase 2: AI Agents (Ngày 5-9)**
+- **Phase 3: Activation Engine (Ngày 10-14)**
+- **Phase 4: Ổn định hóa (Ngày 15-18)**
 
 <!--
 Speaker Notes:
@@ -102,7 +102,7 @@ Không có chuyện “làm song song cho nhanh” nếu chưa xong phase dướ
 
 ---
 
-# Phase 1: Nền tảng (Ngày 1-3)
+# Phase 1: Nền tảng (Ngày 1-4)
 
 ## Mục tiêu: Cấu trúc database chuẩn, đầy đủ và tin cậy để scale.
 
@@ -146,7 +146,7 @@ Làm đúng ngay từ POC thì production mới đỡ đau.
 ## [LEO Activation – 02] Worker Đồng bộ Dữ liệu (ArangoDB → Postgres)
 
 **WHY – Vì sao task này tồn tại?**  
-Activation runtime không được phụ thuộc GraphDB. Mọi quyết định phải chạy trên dữ liệu đã ổn định.
+Activation runtime không được phụ thuộc CDP. Mọi quyết định phải chạy trên dữ liệu đã ổn định.
 
 **Mô tả:**  
 Xây dựng Celery worker để kéo dữ liệu profile từ LEO CDP ArangoDB và upsert vào bảng `cdp_profiles` của Activation.
@@ -177,7 +177,7 @@ Sync sai = AI sai = activation sai.
 Không snapshot thì không audit được. Không audit thì không giải thích được.
 
 **Mô tả:**  
-Implement logic "đóng băng". Khi campaign kích hoạt, hệ thống phải ghi lại chính xác ai đang ở trong segment tại thời điểm đó.
+Implement logic "segment snapshop". Khi campaign kích hoạt, hệ thống phải ghi lại chính xác ai đang ở trong segment tại thời điểm đó.
 
 **Technical Tasks:**
 
@@ -199,7 +199,7 @@ Sau này khách hỏi “vì sao tôi nhận tin”, câu trả lời nằm ở 
 
 ---
 
-# Phase 2: Bộ não AI (Ngày 4-7)
+# Phase 2: AI Agents (Ngày 5-9)
 
 ## Mục tiêu: Text-to-Function & Truy vết Quyết định.
 
@@ -217,7 +217,7 @@ AI phải ra quyết định có log, có trách nhiệm.
 Marketing không viết code. AI phải dịch ngôn ngữ tự nhiên thành hành động có cấu trúc trong Python.
 
 **Mô tả:**  
-Deploy FunctionGemma model (qua API wrapper) để dịch intent marketing thành các function call có cấu trúc.
+Deploy FunctionGemma model (qua API wrapper) để dịch **intent marketing signals** thành các function call có cấu trúc.
 Đọc kỹ technical notes https://blog.google/innovation-and-ai/technology/developers-tools/functiongemma/
 
 **Technical Tasks:**
@@ -268,7 +268,7 @@ Debug AI = đọc bảng này.
 
 ---
 
-# Phase 3: Cơ bắp thực thi (Ngày 8-10)
+# Phase 3: Activation Engine (Ngày 10-14)
 
 ---
 
@@ -306,7 +306,7 @@ Celery giúp gửi không block, nhưng database mới là nguồn dữ liệu c
 ## [LEO Activation – 07] Channel Adapter: Zalo OA & Email
 
 **WHY – Vì sao task này tồn tại?**  
-Việt Nam = Zalo + Email. Không làm tốt thì demo không thuyết phục.
+Việt Nam = Zalo + Email. Ở Việt Nam, Zalo và Email vẫn là kênh tiếp cận user phổ biến.
 
 **Mô tả:**  
 Implement các connector cụ thể cho thị trường Việt Nam.
@@ -334,7 +334,7 @@ Channel hay chết vì lỗi sai data do số điện thoại và email .
 ## [LEO Activation – 08] Channel Adapter: Facebook Page
 
 **WHY – Vì sao task này tồn tại?**  
-Facebook Page vẫn là kênh CSKH và remarketing quan trọng.
+Facebook Page vẫn là kênh customer support và remarketing quan trọng.
 
 **Mô tả:**  
 Implement adapter gửi tin nhắn qua Facebook Page API, phục vụ các use case CSKH và campaign remarketing.
@@ -364,7 +364,7 @@ Không được trộn FB logic chung với Zalo hay Email.
 ## [LEO Activation – 09] Channel Adapter: Push & Telegram
 
 **WHY – Vì sao task này tồn tại?**  
-Kênh realtime giúp người dùng cảm nhận hệ thống đang phản hồi ngay lập tức, không bị “trễ” hay “im lặng”.
+Kênh realtime giúp người dùng cảm nhận hệ thống đang phản hồi ngay lập tức
 
 **Mô tả:**  
 Triển khai các kênh thông báo thời gian thực để gửi phản hồi nhanh cho người dùng ngay sau khi có quyết định activation.
@@ -389,7 +389,7 @@ dù logic phía sau vẫn chạy đúng.
 
 ---
 
-# Phase 4: Ổn định hóa (Ngày 11-12)
+# Phase 4: Ổn định hóa (Ngày 15-18)
 
 ---
 
@@ -519,11 +519,11 @@ Task này để tiết kiệm thời gian cho tương lai.
 | ------------------: | --------------------------------- | -------------- |
 | LEO Activation – 01 | Khởi tạo Database & Extensions    | 🟩 Done        |
 | LEO Activation – 02 | Worker Đồng bộ Dữ liệu            | 🟦 In Progress |
-| LEO Activation – 03 | Segment Snapshot Engine           | ⬜ Todo        |
-| LEO Activation – 04 | FunctionGemma Model Service       | 🟦 In Progress |
-| LEO Activation – 05 | Agent Task Orchestrator           | ⬜ Todo        |
-| LEO Activation – 06 | Unified Dispatcher & Delivery Log | ⬜ Todo        |
-| LEO Activation – 07 | Channel Adapter: Zalo OA & Email  | 🟦 In Progress |
+| LEO Activation – 03 | Segment Snapshot Engine           | 🟩 Done        |
+| LEO Activation – 04 | FunctionGemma Model Service       | 🟩 Done        |
+| LEO Activation – 05 | Agent Task Orchestrator           | 🟩 Done        |
+| LEO Activation – 06 | Unified Dispatcher & Delivery Log | 🟦 In Progress |
+| LEO Activation – 07 | Channel Adapter: Zalo OA & Email  | 🟩 Done        |
 | LEO Activation – 08 | Channel Adapter: Facebook Page    | ⬜ Todo        |
 | LEO Activation – 09 | Channel Adapter: Push & Telegram  | ⬜ Todo        |
 | LEO Activation – 10 | End-to-End Traceability Test      | ⬜ Todo        |
