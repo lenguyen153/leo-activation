@@ -48,7 +48,7 @@ MERGE (:Profile {profile_key:'b_002', name:'Psychology of Money', profile_type:'
 $$) AS (v agtype);
 
 -- ---------------------------------------------------------
--- Insert Nodes (Segments of LEO CDP)
+-- Insert Nodes (Segments)
 -- Improvements:
 --  • Add segment_type (behavioral, lifecycle, value, rule-based)
 --  • Add is_dynamic (agent can reason if membership changes)
@@ -430,20 +430,20 @@ $$) AS (c agtype);
 
 -- ---------------------------------------------------------
 -- 6. Targetable high-value segment reasoning query
--- E.g: “Give me VIP users who are long-term, low-risk investors”
+-- “Give me VIP users who are long-term, low-risk investors”
+-- Segment name matched using regex (LIKE *VIP*)
 -- ---------------------------------------------------------
-
 SELECT * FROM cypher('social_graph', $$
-MATCH (p:Profile)-[:BELONG_TO]->(s:Segment {segment_key:'seg_002'})
+MATCH (p:Profile)-[:BELONG_TO]->(s:Segment)
 MATCH (p)-[i:INVESTS]->(a:Profile)
-WHERE i.horizon = 'long' AND i.risk = 'low'
+WHERE s.name =~ '(?i).*VIP.*'
 RETURN DISTINCT
-  p.name AS customer,
-  a.name AS asset,
-  i.amount AS amount,
-  i.horizon AS horizon,
+  p.name     AS customer,
+  a.name     AS asset,
+  i.amount   AS amount,
+  i.horizon  AS horizon,
   i.strategy AS strategy,
-  i.risk AS risk
+  i.risk     AS risk
 $$) AS (
   customer TEXT,
   asset TEXT,
@@ -452,3 +452,4 @@ $$) AS (
   strategy TEXT,
   risk TEXT
 );
+-- =========================================================
