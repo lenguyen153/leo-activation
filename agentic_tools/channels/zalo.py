@@ -15,6 +15,11 @@ from data_workers.database import get_arango_db
 logger = logging.getLogger(__name__)
 
 class ZaloOAChannel(NotificationChannel):
+
+    # Constants for DB Lookup
+    CONNECTOR_NAME = "LEO Zalo Connector"
+    COLLECTION_NAME = "cdp_dataconnector"
+
     def __init__(self, override_token: str = None):
         # -------- Database Connection --------
         try:
@@ -33,6 +38,10 @@ class ZaloOAChannel(NotificationChannel):
         # Token Management
         self.access_token = override_token or MarketingConfigs.ZALO_OA_TOKEN
         self.refresh_token = MarketingConfigs.ZALO_OA_REFRESH_TOKEN
+
+        # Always try to load the initial state from DB if available
+        if self.db:
+            self._load_tokens_from_db()
 
 
     def send(self, recipient_segment: str, message: str = None, **kwargs):
@@ -73,26 +82,184 @@ class ZaloOAChannel(NotificationChannel):
                 "tracking_id": f"track_{int(time.time())}_{phone}"
             }
 
-            # 3. Send
+            # 3. Attempt 1 Send
             success, error_code, result_msg = self._execute_zns_call(payload)
 
+            # 4. Auto-Refresh Logic
+            if not success and error_code == -124:
+                logger.warning(f"[Zalo] Token expired for {phone}. Refreshing and Retrying...")
+                if self._refresh_access_token():
+                    # Attempt 2 (Retry with new token)
+                    success, error_code, result_msg = self._execute_zns_call(payload)
+                else:
+                    logger.error("[Zalo] Token refresh failed. Aborting retry.")
+
+            # 5. Handle Final Result
             if success:
                 stats["sent"] += 1
                 # NOTE: In real mode, consider saving verified phones
                 # self._save_verified_phone(phone, name, result_msg)
             else:
                 stats["failed"] += 1
-                if error_code == -124:
-                    logger.error("❌ YOUR ACCESS TOKEN IS EXPIRED. Please update ZALO_OA_TOKEN in configs.")
-                    # In test mode, we break immediately if token is bad to save time
-                    return {"status": "error", "message": "Access Token Expired (-124). Update token and retry."}
+                logger.warning(f"[Zalo] Failed to send to {phone}. Error: {error_code} - {result_msg}")
 
         return {
             "status": "success", 
-            "details": f"Test run complete for {len(recipients)} users.", 
+            "details": f"Run complete. Sent: {stats['sent']}, Failed: {stats['failed']}", 
             "stats": stats
         }
+
     
+    def _execute_zns_call(self, payload: Dict) -> Tuple[bool, int, str]:
+        """
+        Executes API call with VERBOSE DEBUGGING.
+        """
+        # 1. Sanitize Token (Strip whitespace which causes many errors)
+        clean_token = self.access_token.strip()
+        
+        headers = {
+            "access_token": clean_token,  # ZNS uses this specific header key
+            "Content-Type": "application/json"
+        }
+        
+        # 2. DEBUG LOGS: Print what we are actually sending
+        # Mask the token so we can verify it without leaking it entirely
+        masked_token = f"{clean_token[:10]}...{clean_token[-10:]}" if len(clean_token) > 20 else "INVALID_SHORT_TOKEN"
+        
+        logger.info("------------- ZALO DEBUG REQUEST -------------")
+        logger.info(f"URL: {self.zns_url}")
+        logger.info(f"Token Used: {masked_token}") 
+        logger.info(f"Token Length: {len(clean_token)} chars")
+        logger.info(f"Payload: {payload}")
+        logger.info("----------------------------------------------")
+
+        try:
+            resp = requests.post(self.zns_url, json=payload, headers=headers, timeout=15)
+            data = resp.json()
+            
+            # 3. DEBUG LOGS: Print exactly what Zalo replied
+            logger.info("------------- ZALO DEBUG RESPONSE ------------")
+            logger.info(f"Status Code: {resp.status_code}")
+            logger.info(f"Raw Body: {resp.text}")
+            logger.info("----------------------------------------------")
+            
+            error_code = data.get("error", -999)
+            message = data.get("message", "Unknown")
+            
+            # Case 1: Success
+            if error_code == 0:
+                msg_id = data.get("data", {}).get("msg_id", "unknown")
+                return True, 0, msg_id
+
+            # Case 2: Token Expired (-124) or Invalid (-14014 sometimes)
+            return False, error_code, message
+
+        except Exception as e:
+            logger.error(f"[Zalo Network Error] {e}")
+            return False, -999, str(e)
+        
+        
+    def _refresh_access_token(self) -> bool:
+        """
+        1. Reads latest Refresh Token from DB.
+        2. Calls Zalo OAuth.
+        3. Saves new tokens to DB.
+        """
+        logger.info("[Zalo] Access Token invalid/expired. Preparing to refresh...")
+        
+        # 1. CRITICAL: Fetch the latest Refresh Token from DB right now
+        # This prevents using a stale token if another process updated it.
+        self._load_tokens_from_db()
+        
+        if not self.refresh_token:
+            logger.error("[Zalo] No Refresh Token available (DB & Config empty). Cannot refresh.")
+            return False
+
+        headers = {"secret_key": self.secret_key}
+        payload = {
+            "refresh_token": self.refresh_token,
+            "app_id": self.app_id,
+            "grant_type": "refresh_token"
+        }
+
+        try:
+            resp = requests.post(self.oauth_url, headers=headers, data=payload, timeout=15)
+            data = resp.json()
+
+            if "access_token" in data:
+                new_at = data["access_token"]
+                new_rt = data["refresh_token"]
+                
+                # Update Memory
+                self.access_token = new_at
+                self.refresh_token = new_rt 
+                
+                # Update Database
+                self._save_tokens_to_db(new_at, new_rt)
+                return True
+            else:
+                logger.error(f"[Zalo] Refresh Failed. Response: {data}")
+                return False
+        except Exception as e:
+            logger.error(f"[Zalo] Refresh Exception: {e}")
+            return False
+
+
+    def _load_tokens_from_db(self):
+        """
+        Fetches the latest tokens from 'cdp_dataconnector' collection.
+        """
+        if not self.db: return
+
+        try:
+            aql = f"""
+            FOR d IN {self.COLLECTION_NAME}
+                FILTER d.name == @name
+                RETURN d.configs
+            """
+            cursor = self.db.aql.execute(aql, bind_vars={'name': self.CONNECTOR_NAME})
+            configs = list(cursor)
+            
+            if configs and len(configs) > 0:
+                cfg = configs[0]
+                self.access_token = cfg.get("zalo_oa_token", self.access_token)
+                self.refresh_token = cfg.get("zalo_refresh_token", self.refresh_token)
+                logger.info("[Zalo] Successfully loaded tokens from DB.")
+            else:
+                logger.warning(f"[Zalo] No connector found with name '{self.CONNECTOR_NAME}'. Using static configs.")
+        except Exception as e:
+            logger.error(f"[Zalo] Failed to load tokens from DB: {e}")
+
+
+    def _save_tokens_to_db(self, new_access_token: str, new_refresh_token: str):
+        """
+        Persists the NEW tokens to 'cdp_dataconnector'.
+        CRITICAL: Zalo Refresh Tokens are single-use. We must save the new one.
+        """
+        if not self.db: return
+
+        try:
+            # We use MERGE to update only the specific fields inside 'configs' object
+            aql = f"""
+            FOR d IN {self.COLLECTION_NAME}
+                FILTER d.name == @name
+                UPDATE d WITH {{
+                    configs: MERGE(d.configs, {{
+                        zalo_oa_token: @at,
+                        zalo_refresh_token: @rt
+                    }}),
+                    updatedAt: DATE_ISO8601(DATE_NOW())
+                }} IN {self.COLLECTION_NAME}
+            """
+            self.db.aql.execute(aql, bind_vars={
+                'name': self.CONNECTOR_NAME,
+                'at': new_access_token,
+                'rt': new_refresh_token
+            })
+            logger.info("[Zalo] ✅ New tokens saved to Database successfully.")
+        except Exception as e:
+            logger.error(f"[Zalo] ❌ CRITICAL: Failed to save new tokens to DB! Next run will fail. Error: {e}")
+
 
     def _format_phone_for_zalo(self, phone: str) -> Optional[str]:
         """
@@ -148,80 +315,3 @@ class ZaloOAChannel(NotificationChannel):
             # logger.info(f"[Zalo] Verified phone saved: {phone}")
         except Exception as e:
             logger.error(f"[Zalo] Failed to save verified phone {phone}: {e}")
-
-
-    def _refresh_access_token(self) -> bool:
-        """Refreshes the token and rotates the Refresh Token."""
-        logger.info("[Zalo] Refreshing token...")
-        headers = {"secret_key": self.secret_key}
-        payload = {
-            "refresh_token": self.refresh_token,
-            "app_id": self.app_id,
-            "grant_type": "refresh_token"
-        }
-
-        try:
-            resp = requests.post(self.oauth_url, headers=headers, data=payload, timeout=10)
-            data = resp.json()
-
-            if "access_token" in data:
-                self.access_token = data["access_token"]
-                self.refresh_token = data["refresh_token"] 
-                # TODO: Save new tokens to persistent storage (DB/File) here!
-                return True
-            else:
-                logger.error(f"[Zalo] Refresh Failed: {data}")
-                return False
-        except Exception as e:
-            logger.error(f"[Zalo] Refresh Exception: {e}")
-
-            return False
-        
-        
-    def _execute_zns_call(self, payload: Dict) -> Tuple[bool, int, str]:
-        """
-        Executes API call with VERBOSE DEBUGGING.
-        """
-        # 1. Sanitize Token (Strip whitespace which causes many errors)
-        clean_token = self.access_token.strip()
-        
-        headers = {
-            "access_token": clean_token,  # ZNS uses this specific header key
-            "Content-Type": "application/json"
-        }
-        
-        # 2. DEBUG LOGS: Print what we are actually sending
-        # Mask the token so we can verify it without leaking it entirely
-        masked_token = f"{clean_token[:10]}...{clean_token[-10:]}" if len(clean_token) > 20 else "INVALID_SHORT_TOKEN"
-        
-        logger.info("------------- ZALO DEBUG REQUEST -------------")
-        logger.info(f"URL: {self.zns_url}")
-        logger.info(f"Token Used: {masked_token}") 
-        logger.info(f"Token Length: {len(clean_token)} chars")
-        logger.info(f"Payload: {payload}")
-        logger.info("----------------------------------------------")
-
-        try:
-            resp = requests.post(self.zns_url, json=payload, headers=headers, timeout=15)
-            data = resp.json()
-            
-            # 3. DEBUG LOGS: Print exactly what Zalo replied
-            logger.info("------------- ZALO DEBUG RESPONSE ------------")
-            logger.info(f"Status Code: {resp.status_code}")
-            logger.info(f"Raw Body: {resp.text}")
-            logger.info("----------------------------------------------")
-            
-            error_code = data.get("error", -999)
-            message = data.get("message", "Unknown")
-            
-            if error_code == 0:
-                msg_id = data.get("data", {}).get("msg_id", "unknown")
-                return True, 0, msg_id
-
-            return False, error_code, message
-
-        except Exception as e:
-            logger.error(f"[Zalo Network Error] {e}")
-            return False, -999, str(e)
-
-    
