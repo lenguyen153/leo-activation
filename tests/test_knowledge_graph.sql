@@ -5,7 +5,6 @@
 --   - Designed to test reasoning queries, not just CRUD
 -- =========================================================
 
-
 -- load Apache AGE for Graph features
 LOAD 'age';
 SET search_path = ag_catalog, "$user", public;
@@ -46,6 +45,50 @@ MERGE (:Profile {profile_key:'s_005', name:'VNM', profile_type:'stock', sector:'
 MERGE (:Profile {profile_key:'b_001', name:'Clean Code', profile_type:'book'})
 MERGE (:Profile {profile_key:'b_002', name:'Psychology of Money', profile_type:'book'})
 $$) AS (v agtype);
+
+-- ---------------------------------------------------------
+-- Insert Nodes (Segments of LEO CDP)
+-- Improvements:
+--  • Add segment_type (behavioral, lifecycle, value, rule-based)
+--  • Add is_dynamic (agent can reason if membership changes)
+--  • Add definition (human + agent readable logic hint)
+--  • totalCount is kept but treated as snapshot / optional
+-- ---------------------------------------------------------
+SELECT * FROM cypher('social_graph', $$
+MERGE (:Segment {
+  segment_key:'seg_001',
+  name:'New Users',
+  segment_type:'lifecycle',
+  description:'First-time customers',
+  definition:'Profiles created within last 7 days',
+  is_dynamic:true,
+  totalCount:100,
+  marketing_goals:'Onboarding'
+})
+
+MERGE (:Segment {
+  segment_key:'seg_002',
+  name:'VIP Customers',
+  segment_type:'value',
+  description:'High-value customers',
+  definition:'Total investment amount > 10,000',
+  is_dynamic:true,
+  totalCount:50,
+  marketing_goals:'Retention'
+})
+
+MERGE (:Segment {
+  segment_key:'seg_003',
+  name:'Engaged Users',
+  segment_type:'behavioral',
+  description:'Active users in last 30 days',
+  definition:'Has recent interactions or investments',
+  is_dynamic:true,
+  totalCount:200,
+  marketing_goals:'Engagement'
+})
+$$) AS (v agtype);
+
 
 -- ---------------------------------------------------------
 -- Insert Relationships
@@ -102,6 +145,33 @@ MATCH (a:Profile {profile_key:'u_001'}), (b:Profile {profile_key:'b_002'})
 MERGE (a)-[:LIKES {reason:'financial thinking'}]->(b)
 RETURN count(*)
 $$) AS (c agtype);
+
+-- ---------------------------------------------------------
+-- In CDP Segment : A profile can belong to multiple segments.
+-- Improved BELONG_TO relationship with reasoning metadata
+-- ---------------------------------------------------------
+SELECT * FROM cypher('social_graph', $$
+MATCH (p:Profile {profile_key:'u_001'})
+MATCH (s1:Segment {segment_key:'seg_001'})
+MATCH (s2:Segment {segment_key:'seg_003'})
+
+MERGE (p)-[:BELONG_TO {
+  since:'2026-01-01',
+  source:'rule_engine',
+  confidence:0.95,
+  snapshot_date:'2026-01-14'
+}]->(s1)
+
+MERGE (p)-[:BELONG_TO {
+  since:'2025-12-15',
+  source:'behavioral_model',
+  confidence:0.87,
+  snapshot_date:'2026-01-14'
+}]->(s2)
+
+RETURN count(*)
+$$) AS (c agtype);
+
 
 -- ---------------------------------------------------------
 -- Indexes for AGE graph tables (PostgreSQL level)
@@ -178,6 +248,31 @@ USING btree (
 );
 
 -- ---------------------------------------------------------
+-- Segment indexes (critical for CDP scale)
+-- ---------------------------------------------------------
+
+-- Segment key lookup
+CREATE INDEX IF NOT EXISTS idx_segment_segment_key
+ON social_graph."Segment"
+USING btree (
+  agtype_access_operator(properties, '"segment_key"'::agtype)
+);
+
+-- Segment type filtering (behavioral / lifecycle / value)
+CREATE INDEX IF NOT EXISTS idx_segment_segment_type
+ON social_graph."Segment"
+USING btree (
+  agtype_access_operator(properties, '"segment_type"'::agtype)
+);
+
+-- Dynamic vs static segments
+CREATE INDEX IF NOT EXISTS idx_segment_is_dynamic
+ON social_graph."Segment"
+USING btree (
+  agtype_access_operator(properties, '"is_dynamic"'::agtype)
+);
+
+-- ---------------------------------------------------------
 -- Demo Queries (Reasoning Tests)
 -- ---------------------------------------------------------
 
@@ -205,3 +300,105 @@ MATCH (p)-[:WORKS_FOR]->(c),(p)-[:INVESTS]->(s)
 WHERE c.industry <> s.sector
 RETURN DISTINCT p.name, c.name, s.name
 $$) AS (person TEXT, company TEXT, asset TEXT);
+
+-- ---------------------------------------------------------
+-- 5. Profiles grouped by segment with reasoning metadata
+-- ---------------------------------------------------------
+SELECT * FROM cypher('social_graph', $$
+MATCH (p:Profile)-[b:BELONG_TO]->(s:Segment)
+RETURN DISTINCT
+  p.name            AS profile,
+  p.profile_type    AS type,
+  s.name            AS segment,
+  s.segment_type    AS segment_type,
+  b.source          AS source,
+  b.confidence      AS confidence
+ORDER BY s.name, b.confidence DESC
+$$) AS (
+  profile TEXT,
+  type TEXT,
+  segment TEXT,
+  segment_type TEXT,
+  source TEXT,
+  confidence FLOAT
+);
+
+
+-- ---------------------------------------------------------
+-- Make Diana a true VIP customer
+-- ---------------------------------------------------------
+SELECT * FROM cypher('social_graph', $$
+MATCH (p:Profile {profile_key:'u_004'})
+MATCH (s:Segment {segment_key:'seg_002'})  
+
+MERGE (p)-[:BELONG_TO {
+  since:'2025-10-01',
+  source:'rule_engine',
+  confidence:0.98,
+  snapshot_date:'2026-01-14'
+}]->(s)
+
+RETURN count(*)
+$$) AS (c agtype);
+
+-- ---------------------------------------------------------
+-- Add Bob as a secondary VIP (higher risk profile)
+-- ---------------------------------------------------------
+SELECT * FROM cypher('social_graph', $$
+MATCH (p:Profile {profile_key:'u_002'})
+MATCH (vip:Segment {segment_key:'seg_002'})
+MATCH (asset:Profile {profile_key:'s_004'}) 
+
+MERGE (p)-[:BELONG_TO {
+  since:'2025-11-20',
+  source:'ml_model',
+  confidence:0.82,
+  snapshot_date:'2026-01-14'
+}]->(vip)
+
+MERGE (p)-[:INVESTS {
+  amount:18000,
+  horizon:'long',
+  risk:'medium',
+  strategy:'growth'
+}]->(asset)
+
+RETURN count(*)
+$$) AS (c agtype);
+
+
+-- ---------------------------------------------------------
+-- Add a VIP-grade investment for Diana
+-- ---------------------------------------------------------
+SELECT * FROM cypher('social_graph', $$
+MATCH (p:Profile {profile_key:'u_004'})
+MATCH (s:Profile {profile_key:'s_005'})  
+
+MERGE (p)-[:INVESTS {
+  amount:30000,
+  horizon:'long',
+  risk:'low',
+  strategy:'capital_preservation'
+}]->(s)
+
+RETURN count(*)
+$$) AS (c agtype);
+
+
+-- ---------------------------------------------------------
+-- 6. Targetable high-value segment reasoning query
+-- E.g: “Give me VIP users who are long-term, low-risk investors”
+-- ---------------------------------------------------------
+SELECT * FROM cypher('social_graph', $$
+MATCH (p:Profile)-[:BELONG_TO]->(s:Segment {segment_key:'seg_002'})
+MATCH (p)-[i:INVESTS]->(a:Profile)
+WHERE i.horizon = 'long' AND i.risk = 'low'
+RETURN DISTINCT
+  p.name AS customer,
+  a.name AS asset,
+  i.amount AS amount
+$$) AS (
+  customer TEXT,
+  asset TEXT,
+  amount FLOAT
+);
