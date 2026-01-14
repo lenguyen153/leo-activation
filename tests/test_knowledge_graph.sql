@@ -5,6 +5,7 @@
 --   - Designed to test reasoning queries, not just CRUD
 -- =========================================================
 
+
 -- load Apache AGE for Graph features
 LOAD 'age';
 SET search_path = ag_catalog, "$user", public;
@@ -95,21 +96,55 @@ $$) AS (v agtype);
 -- ---------------------------------------------------------
 
 -- Investments
+
+-- Alice: long-term, medium risk → growth-oriented strategy
+-- NVDA
 SELECT * FROM cypher('social_graph', $$
-MATCH (a:Profile {profile_key:'u_001'}), (s:Profile {profile_key:'s_001'})
-MERGE (a)-[:INVESTS {amount:15000, horizon:'long', risk:'medium'}]->(s)
+MATCH (a:Profile {profile_key:'u_001'})
+MATCH (s:Profile {profile_key:'s_001'}) 
+
+MERGE (a)-[:INVESTS {
+  amount:15000,
+  horizon:'long',
+  risk:'medium',
+  strategy:'capital_growth',
+  rationale:'belief in long-term AI demand'
+}]->(s)
+
 RETURN count(*)
 $$) AS (c agtype);
 
+-- Bob: short-term, high risk → speculative trading
+-- BTC
 SELECT * FROM cypher('social_graph', $$
-MATCH (b:Profile {profile_key:'u_002'}), (s:Profile {profile_key:'s_003'})
-MERGE (b)-[:INVESTS {amount:5000, horizon:'short', risk:'high'}]->(s)
+MATCH (b:Profile {profile_key:'u_002'})
+MATCH (s:Profile {profile_key:'s_003'}) 
+
+MERGE (b)-[:INVESTS {
+  amount:5000,
+  horizon:'short',
+  risk:'high',
+  strategy:'speculative_trading',
+  rationale:'short-term price volatility'
+}]->(s)
+
 RETURN count(*)
 $$) AS (c agtype);
 
+-- Diana: long-term, low risk → capital preservation
+-- VNM ETF
 SELECT * FROM cypher('social_graph', $$
-MATCH (d:Profile {profile_key:'u_004'}), (s:Profile {profile_key:'s_005'})
-MERGE (d)-[:INVESTS {amount:20000, horizon:'long', risk:'low'}]->(s)
+MATCH (d:Profile {profile_key:'u_004'})
+MATCH (s:Profile {profile_key:'s_005'}) 
+
+MERGE (d)-[:INVESTS {
+  amount:20000,
+  horizon:'long',
+  risk:'low',
+  strategy:'capital_preservation',
+  rationale:'stable returns and diversification'
+}]->(s)
+
 RETURN count(*)
 $$) AS (c agtype);
 
@@ -248,6 +283,16 @@ USING btree (
 );
 
 -- ---------------------------------------------------------
+-- 8. INVESTS.strategy : Strategy-based investor segmentation
+-- ---------------------------------------------------------
+CREATE INDEX IF NOT EXISTS idx_invests_strategy
+ON social_graph."INVESTS"
+USING btree (
+  agtype_access_operator(properties, '"strategy"'::agtype)
+);
+
+
+-- ---------------------------------------------------------
 -- Segment indexes (critical for CDP scale)
 -- ---------------------------------------------------------
 
@@ -271,6 +316,7 @@ ON social_graph."Segment"
 USING btree (
   agtype_access_operator(properties, '"is_dynamic"'::agtype)
 );
+
 
 -- ---------------------------------------------------------
 -- Demo Queries (Reasoning Tests)
@@ -323,7 +369,6 @@ $$) AS (
   confidence FLOAT
 );
 
-
 -- ---------------------------------------------------------
 -- Make Diana a true VIP customer
 -- ---------------------------------------------------------
@@ -366,7 +411,6 @@ MERGE (p)-[:INVESTS {
 RETURN count(*)
 $$) AS (c agtype);
 
-
 -- ---------------------------------------------------------
 -- Add a VIP-grade investment for Diana
 -- ---------------------------------------------------------
@@ -384,11 +428,11 @@ MERGE (p)-[:INVESTS {
 RETURN count(*)
 $$) AS (c agtype);
 
-
 -- ---------------------------------------------------------
 -- 6. Targetable high-value segment reasoning query
 -- E.g: “Give me VIP users who are long-term, low-risk investors”
 -- ---------------------------------------------------------
+
 SELECT * FROM cypher('social_graph', $$
 MATCH (p:Profile)-[:BELONG_TO]->(s:Segment {segment_key:'seg_002'})
 MATCH (p)-[i:INVESTS]->(a:Profile)
@@ -396,9 +440,15 @@ WHERE i.horizon = 'long' AND i.risk = 'low'
 RETURN DISTINCT
   p.name AS customer,
   a.name AS asset,
-  i.amount AS amount
+  i.amount AS amount,
+  i.horizon AS horizon,
+  i.strategy AS strategy,
+  i.risk AS risk
 $$) AS (
   customer TEXT,
   asset TEXT,
-  amount FLOAT
+  amount FLOAT,
+  horizon TEXT,
+  strategy TEXT,
+  risk TEXT
 );
