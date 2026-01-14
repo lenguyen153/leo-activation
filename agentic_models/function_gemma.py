@@ -78,17 +78,18 @@ class FunctionGemmaEngine(BaseLLMEngine):
             # We split by comma BUT ignore commas inside <escape> tags.
             
             # This regex finds: key : ( <escape>content<escape> OR simple_value )
-            arg_pattern = r"(\w+)\s*:\s*(?:<escape>(.*?)<escape>|([^,{}]+))"
+            arg_pattern = r"(\w+)\s*:\s*(?:<escape>(.*?)<escape>|'([^']*)'|\"([^\"]*)\"|([^,{}]+))"
             
-            for k, v_escaped, v_simple in re.findall(arg_pattern, args_block):
-                # Choose the captured group that isn't empty
-                raw_val = v_escaped if v_escaped else v_simple
-                parsed_args[k] = self._cast_value(raw_val)
+            for key, val_escaped, val_single, val_double, val_simple in re.findall(arg_pattern, args_block):
+                # Select the captured group that isn't empty
+                if val_escaped: raw_val = val_escaped
+                elif val_single is not None and val_single != "": raw_val = val_single
+                elif val_double is not None and val_double != "": raw_val = val_double
+                else: raw_val = val_simple
 
-            calls.append({
-                "name": name,
-                "arguments": parsed_args
-            })
+                parsed_args[key] = self._cast_value(raw_val)
+
+            calls.append({"name": name, "arguments": parsed_args})
 
         return calls
 

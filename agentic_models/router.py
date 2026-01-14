@@ -10,29 +10,26 @@ def build_messages(prompt):
             "role": "system",
             "content": (
                 "You are LEO, an expert CDP assistant. "
-                "Select the correct tool based on the user's intent.\n"
-                "CRITICAL INSTRUCTION: You must include a 'Thought:' line before every tool call.\n"
+                "Your goal is to understand the user's intent and act using the available tools.\n"
                 "\n"
-                "EXAMPLES:\n"
-                # Example 1: No Tool
-                "User: 'Hi there'\n"
-                "Thought: This is a greeting. No specific tool is required.\n"
-                "Tool: None\n\n"
-                
-                # Example 2: Activation (Complex)
+                "### GUIDELINES:\n"
+                "1. **Analyze First:** Always output a short 'Thought:' explaining your reasoning.\n"
+                "2. **Stop & Act:** After your thought, if a tool is needed, trigger it immediately. Do not write 'Tool: ...' in text.\n"
+                "3. **Parameter Mapping Rules:**\n"
+                "   - 'Zalo' or 'Zalo OA' -> channel='zalo_oa'\n"
+                "   - 'Facebook' -> channel='facebook_page'\n"
+                "   - 'Push' -> channel='mobile_push'\n"
+                "   - Segment names must be extracted exactly as written (including spaces).\n"
+                "\n"
+                "### EXAMPLES:\n"
                 "User: 'Sync the VIP segment to Facebook Ads'\n"
-                "Thought: The user wants to activate a specific customer segment on an external channel.\n"
-                "Tool: activate_channel(segment='VIP', channel='facebook_ads')\n\n"
-                
-                # Example 3: Weather (The Fix)
+                "Thought: The user wants to activate the 'VIP' segment. The channel 'Facebook Ads' maps to 'facebook_page'.\n"
+                "\n"
+                "User: 'Send thank you notification to segment \"Users with phone number to test\" via Zalo'\n"
+                "Thought: Intent is activation. Segment is 'Users with phone number to test'. Channel 'Zalo' maps to 'zalo_oa'. Message content is implied as 'Thank you notification'.\n"
+                "\n"
                 "User: 'Is it raining in Hanoi?'\n"
-                "Thought: The user is asking for current weather conditions in a specific city. I should use the weather tool, not the date tool.\n"
-                "Tool: get_current_weather(location='Hanoi')\n\n"
-                
-                # Example 4: Date (Differentiation)
-                "User: 'What day is it?'\n"
-                "Thought: The user is explicitly asking for the current date.\n"
-                "Tool: get_date()"
+                "Thought: User needs weather info for Hanoi. I will use the weather tool.\n"
             ),
         },
         {
@@ -67,103 +64,89 @@ class AgentRouter:
             return self.gemma.generate(messages, tools)
         return self.gemini.generate(messages, tools)
 
-    def extract_tool_calls(self, raw_output: str) -> List[Dict[str, Any]]:
-        """Attempt to extract tool calls using FunctionGemma first, then fallback to Gemini extractor."""
-        try:
-            if isinstance(raw_output, str) and "<start_function_call>" in raw_output:
-                return self.gemma.extract_tool_calls(raw_output)
-        except Exception:
-            pass
-
-        # Fallback to gemini's last-response extraction
-        try:
-            return self.gemini.extract_tool_calls(raw_output)
-        except Exception:
-            return []
 
     def handle_message(self, messages: List[Dict[str, Any]], tools: Optional[List[Any]] = None, tools_map: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """Run the full agent pipeline:
-
-        1. Use FunctionGemma to generate intent + tool calls
-        2. If no tool calls: ask Gemini for a semantic reply
-        3. If tool calls: execute tools (from `tools_map`) and append results to messages
-        4. Ask Gemini to synthesize final answer from augmented messages
-
-        Returns a dict: { 'answer': str, 'debug': { 'calls': [ ... ], 'data': [ ... ] } }
-        """
         tools_map = tools_map or {}
 
         # 1. Intent detection via FunctionGemma
+        # The model will output: "Thought: ... <start_function_call>..."
         raw_output = self.gemma.generate(messages, tools)
-        print("Raw output from FunctionGemma: ", raw_output)
+        
+        # Parse the output: Split "Thought" from "Function Call" tags
+        # (This is just for clean logging)
+        thought_text = raw_output.split("<start_function_call>")[0].strip()
+        print(f"Agent Thought: {thought_text}")
 
         # Extract tool calls from FunctionGemma's output
         tool_calls = self.gemma.extract_tool_calls(raw_output) or []
-        print("Extracted tool calls: ", tool_calls)
-
+        
         debug_calls = []
         debug_results = []
 
-        # 2. No tools -> semantic reply via Gemini
+        # 2. Case A: No tools -> semantic reply via Gemini
+        # If Gemma didn't call a tool, we hand off to Gemini for a better conversational reply
         if not tool_calls:
             print("No tool calls detected, using Gemini for direct answer.")
+            # We pass the thought as context to Gemini so it knows what happened
+            if thought_text:
+                messages.append({"role": "assistant", "content": thought_text})
+            
             answer = self.gemini.generate(messages, tools)
             return {"answer": answer, "debug": {"calls": [], "data": []}}
 
-        # 3. Execute tools
+        # 3. Case B: Execute Tools
+        # Add the assistant's decision to history (CRITICAL for multi-turn)
         messages.append({
-            "role": "assistant",
-            "content": None,
-            "tool_calls": [{"type": "function", "function": call} for call in tool_calls],
+            "role": "assistant", 
+            "content": raw_output # Contains both thought and function tokens
         })
-        print("Messages before tool execution: ", messages)
 
+        print(f"\n🛠️  TRIGGERED {len(tool_calls)} TOOL(S):")
 
         tool_outputs_for_llm = []
+        final_summary_lines = []
 
         for call in tool_calls:
             name = call["name"]
             args = call.get("arguments", {})
+            
+            # --- PRINT DETAILED DEBUG INFO ---
+            print(f"  [>] Calling: {name}")
+            print(f"  [i] Args:    {json.dumps(args, indent=2)}")
 
             debug_calls.append({"name": name, "arguments": args})
 
             if name not in tools_map:
                 result = {"error": f"Tool '{name}' not registered"}
+                print(f"  [X] Error: Tool not found")
             else:
                 try:
                     result = tools_map[name](**args)
-                except Exception as exc:  # pylint: disable=broad-except
+                    print(f"  [✓] Success. Result: {str(result)[:100]}...") # Print first 100 chars
+                except Exception as exc:
                     result = {"error": str(exc)}
+                    print(f"  [!] Exception: {exc}")
 
             debug_results.append({"name": name, "response": result})
 
+            # Format specifically for FunctionGemma/Gemini tool role
             tool_outputs_for_llm.append({
                 "role": "tool",
                 "name": name,
                 "content": json.dumps(result, default=str),
             })
 
+            status = "Success" if "error" not in result else "Failed"
+            final_summary_lines.append(f"- Action: {name}\n  Status: {status}\n  Output: {result}")
+
         messages.extend(tool_outputs_for_llm)
 
-        # 4. Final synthesis (prefer Gemini)
-        final_answer = (self.gemini.generate(messages, tools) or "").strip()
+        # 4. Final synthesis
+        # We ask Gemini to summarize the result because it writes better English/Vietnamese than Gemma 2b
+        # final_answer = (self.gemini.generate(messages, tools) or "").strip()
 
-        # Fallback: if Gemini returns empty, try Gemma or synthesize a summary from tool outputs
-        if not final_answer:
-            try:
-                fallback = (self.gemma.generate(messages, tools) or "").strip()
-                if fallback:
-                    final_answer = fallback
-                else:
-                    # Synthesize a short summary from executed tools
-                    summaries = []
-                    for r in debug_results:
-                        name = r.get("name")
-                        resp = r.get("response")
-                        summaries.append(f"{name}: {resp}")
-                    final_answer = "Executed tools: " + "; ".join(summaries) if summaries else "No answer could be synthesized."
-            except Exception:
-                final_answer = "No answer could be synthesized."
+        print("\n✅ Execution Complete. Skipping final LLM synthesis.")
+        final_answer = "### Tool Execution Report\n" + "\n".join(final_summary_lines)
 
         return {
             "answer": final_answer,
