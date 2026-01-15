@@ -172,38 +172,66 @@ source venv/bin/activate
 ### Install Dependencies
 
 ```bash
-pip install -r requirements.txt
+pip install --upgrade pip; pip install -r requirements.txt
 ```
 
 ---
 
 ## ⚙️ Configuration
 
-Create a `.env` file in the project root:
+Copy .env.example or create a `.env` file in the project root:
 
 ```env
-# LLMs
-HUGGINGFACE_TOKEN=your_huggingface_token
-GEMINI_API_KEY=your_gemini_api_key
+
+# Copy this to .env and fill in secrets before running the app
+
+# Model configuration
 GEMINI_MODEL_ID=gemini-2.5-flash-lite
+GEMINI_API_KEY=
 
-# Database
-DATABASE_URL=postgresql://user:password@localhost:5432/leo
-
-# Email
-EMAIL_PROVIDER=smtp
+# SendGrid / SMTP (Email)
+EMAIL_PROVIDER=smtp            # or 'sendgrid'
+SENDGRID_API_KEY=
+SENDGRID_FROM=no-reply@example.com
 SMTP_HOST=smtp.gmail.com
 SMTP_PORT=587
-SMTP_USERNAME=you@domain.com
-SMTP_PASSWORD=app_password
+SMTP_USERNAME=
+SMTP_PASSWORD=
 SMTP_USE_TLS=1
 
 # Zalo OA
-ZALO_OA_TOKEN=your_zalo_token
+ZALO_OA_TOKEN=
+ZALO_OA_API_URL=https://openapi.zalo.me/v3.0/oa/message/cs
+ZALO_OA_MAX_RETRIES=2
 
 # Facebook Page
-FB_PAGE_ACCESS_TOKEN=your_page_token
-FB_PAGE_ID=your_page_id
+FB_PAGE_ACCESS_TOKEN=
+FB_PAGE_ID=
+
+# Optional helpers
+HUGGINGFACE_TOKEN=
+LEO_CDP_API_URL=
+
+# Database configuration
+
+# PostgreSQL (Target)
+DB_HOST=localhost
+DB_NAME=leo_cdp
+DB_USER=postgres
+DB_PASSWORD=your_pg_password
+
+# ArangoDB (Source)
+ARANGO_HOST=http://localhost:8529
+ARANGO_DB=leo_cdp_source
+ARANGO_USER=root
+ARANGO_PASSWORD=your_arango_password
+
+# Redis (Broker & Result Backend)
+REDIS_URL=redis://localhost:6379/0
+
+# Sync Settings
+DEFAULT_TENANT_ID=00000000-0000-0000-0000-000000000000
+
 ```
 
 Do **not** commit secrets.
@@ -250,6 +278,7 @@ The system will:
 ├── data-workers/           # Embeddings & async jobs
 ├── sql-scripts/            # Apache AGE & PG schema
 ├── shell-scripts/          # Local infra helpers
+├── api/                    # Fast API route handlers
 ├── test-api/               # Integration tests
 └── requirements.txt
 ```

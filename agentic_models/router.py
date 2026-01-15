@@ -140,13 +140,13 @@ class AgentRouter:
             final_summary_lines.append(f"- Action: {name}\n  Status: {status}\n  Output: {result}")
 
         messages.extend(tool_outputs_for_llm)
-
+        
         # 4. Final synthesis
         # We ask Gemini to summarize the result because it writes better English/Vietnamese than Gemma 2b
-        # final_answer = (self.gemini.generate(messages, tools) or "").strip()
+        final_answer = (self.gemini.generate(messages, tools) or "").strip()
 
         print("\n✅ Execution Complete. Skipping final LLM synthesis.")
-        final_answer = "### Tool Execution Report\n" + "\n".join(final_summary_lines)
+        #final_answer = "### Tool Execution Report\n" + "\n".join(final_summary_lines)
 
         return {
             "answer": final_answer,
