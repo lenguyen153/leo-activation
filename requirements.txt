@@ -1,9 +1,15 @@
+# requirements.txt
+
 fastapi
 # Web framework for building high-performance REST / async APIs
 # Used for LEO Activation & CDP service endpoints
 
 fastapi-pagination
 # Pagination utilities for FastAPI, standardized limit/offset and cursor-based pagination
+
+prometheus-fastapi-instrumentator
+# Prometheus metrics integration for FastAPI
+# Provides automatic metrics collection and endpoint for Prometheus scraping
 
 uvicorn
 # ASGI server to run FastAPI
@@ -36,6 +42,10 @@ pydantic
 accelerate
 # Hugging Face utility for efficient model loading and inference
 # Helps with multi-GPU, mixed precision, and memory optimization
+
+sentence-transformers
+# Library for generating sentence and text embeddings
+# Used for semantic search, clustering, and similarity tasks
 
 google-genai
 # Google Gemini SDK (latest)
