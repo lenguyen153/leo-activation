@@ -4,7 +4,6 @@ from typing import Optional
 
 from dotenv import load_dotenv
 
-
 # ============================================================
 # Environment bootstrap
 # ============================================================
@@ -159,7 +158,6 @@ GEMINI_API_KEY: Optional[str] = os.getenv("GEMINI_API_KEY")
 # - Requires strict prompt formatting and control tokens
 # - Best used only for tool routing / function selection
 GEMMA_FUNCTION_MODEL_ID: str = "google/functiongemma-270m-it"
-
 
 
 # Hugging Face access token
