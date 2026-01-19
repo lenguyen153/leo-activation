@@ -63,6 +63,36 @@ CORS_ALLOW_CREDENTIALS: bool = True
 CORS_ALLOW_METHODS = ["*"]
 CORS_ALLOW_HEADERS = ["*"]
 
+# ============================================================
+# Gemini LLM Configuration
+# ============================================================
+# Model ID is configurable to allow rapid switching without redeploy.
+# Default chosen for low latency and cost.
+GEMINI_MODEL_ID: str = os.getenv("GEMINI_MODEL_ID", "gemini-2.5-flash-lite")
+
+# API key is intentionally not defaulted.
+# Missing key should fail at runtime, not silently degrade.
+GEMINI_API_KEY: Optional[str] = os.getenv("GEMINI_API_KEY")
+
+
+# ============================================================
+# Gemma Function Calling Model Configuration
+# ============================================================
+# FunctionGemma 270M:
+# - Small, fast
+# - Requires strict prompt formatting and control tokens
+# - Best used only for tool routing / function selection
+GEMMA_FUNCTION_MODEL_ID: str = "google/functiongemma-270m-it"
+
+
+# Hugging Face access token
+# Required when loading private models or avoiding rate limits
+HUGGINGFACE_TOKEN: str = os.getenv("HUGGINGFACE_TOKEN")
+
+# Default Redis Configuration for caching and state management
+REDIS_URL: Optional[str] = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+CELERY_REDIS_URL: Optional[str] = os.getenv("CELERY_REDIS_URL", "redis://localhost:6379/1")
+
 
 # ============================================================
 # Marketing / Messaging Integrations Configuration
@@ -87,11 +117,11 @@ class MarketingConfigs:
     BREVO_API_KEY: Optional[str] = os.getenv("BREVO_API_KEY")
     BREVO_FROM_EMAIL: Optional[str] = os.getenv("BREVO_FROM_EMAIL")
     BREVO_FROM_NAME: Optional[str] = os.getenv("BREVO_FROM_NAME")
-    
+
     # -------- SendGrid --------
     SENDGRID_API_KEY: Optional[str] = os.getenv("SENDGRID_API_KEY")
     SENDGRID_FROM: Optional[str] = os.getenv("SENDGRID_FROM")
-    
+
     # -------- SMTP --------
     SMTP_HOST: str = os.getenv("SMTP_HOST", "smtp.gmail.com")
     try:
@@ -126,7 +156,7 @@ class MarketingConfigs:
     # --------------------------------------------------------
     FB_PAGE_ACCESS_TOKEN: Optional[str] = os.getenv("FB_PAGE_ACCESS_TOKEN")
     FB_PAGE_ID: Optional[str] = os.getenv("FB_PAGE_ID")
-    
+
     # --------------------------------------------------------
     # Mobile Push Notifications
     # --------------------------------------------------------
@@ -135,35 +165,3 @@ class MarketingConfigs:
     # Firebase Cloud Messaging (FCM)
     FCM_PROJECT_ID: Optional[str] = os.getenv("FCM_PROJECT_ID")
     FCM_SERVICE_ACCOUNT_JSON: Optional[str] = os.getenv("FCM_SERVICE_ACCOUNT_JSON")
-
-
-
-# ============================================================
-# Gemini LLM Configuration
-# ============================================================
-# Model ID is configurable to allow rapid switching without redeploy.
-# Default chosen for low latency and cost.
-GEMINI_MODEL_ID: str = os.getenv("GEMINI_MODEL_ID", "gemini-2.5-flash-lite")
-
-# API key is intentionally not defaulted.
-# Missing key should fail at runtime, not silently degrade.
-GEMINI_API_KEY: Optional[str] = os.getenv("GEMINI_API_KEY")
-
-
-# ============================================================
-# Gemma Function Calling Model Configuration
-# ============================================================
-# FunctionGemma 270M:
-# - Small, fast
-# - Requires strict prompt formatting and control tokens
-# - Best used only for tool routing / function selection
-GEMMA_FUNCTION_MODEL_ID: str = "google/functiongemma-270m-it"
-
-
-# Hugging Face access token
-# Required when loading private models or avoiding rate limits
-HUGGINGFACE_TOKEN: str = os.getenv("HUGGINGFACE_TOKEN")
-
-# Default Redis Configuration for caching and state management
-REDIS_URL: Optional[str] = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-CELERY_REDIS_URL: Optional[str] = os.getenv("CELERY_REDIS_URL", "redis://localhost:6379/1")
