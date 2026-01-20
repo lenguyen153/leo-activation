@@ -8,7 +8,9 @@ from email.utils import formataddr
 
 from agentic_tools.channels.activation import NotificationChannel
 from main_configs import MarketingConfigs
-from data_workers.database import get_arango_db
+
+from data_utils.settings import DatabaseSettings
+from data_utils.arango_client import get_arango_db
 
 from agentic_tools.channels.helpers import (
     MessageRenderer,
@@ -29,7 +31,7 @@ class SegmentProfileLoader:
     def __init__(self):
         self.db = None
         try:
-            self.db = get_arango_db()
+            self.db = get_arango_db(DatabaseSettings())
         except Exception as e:
             logger.error(f"[ProfileLoader] Failed to connect to ArangoDB: {e}")
 

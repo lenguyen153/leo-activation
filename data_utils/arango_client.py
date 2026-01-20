@@ -1,9 +1,6 @@
 from arango import ArangoClient
 from data_utils.settings import DatabaseSettings
 
-
-
-
 def get_arango_db(settings: DatabaseSettings):
     """
     Create and return an ArangoDB database connection.
