@@ -16,13 +16,24 @@ from data_workers.pg_profile_repository import PGProfileRepository
 logger = logging.getLogger(__name__)
 
 
-def run_synch_profiles(segment_name: str) -> int:
+def run_synch_profiles(segment_name: str,
+                       tenant_id: Optional[str] = None, 
+                        segment_id: Optional[str] = None,                        
+                        last_sync_ts: Optional[str] = None) -> int:
     """
     Entry point for syncing profiles of a given segment
     from ArangoDB into PostgreSQL.
+    
+    Args:
+        tenant_id: The tenant identifier.
+        segment_id: The segment identifier (optional).
+        segment_name: The segment name (optional).
+        last_sync_ts: The timestamp of the last sync (optional).
+    Returns:
+        int: The number of profiles synced.
     """
 
-    logger.info("Starting sync for segment: %s", segment_name)
+    logger.info("Starting sync for segment: %s tenant_id: %s segment_id: %s last_sync_ts: %s", segment_name, tenant_id, segment_id, last_sync_ts)
 
     # --- Infrastructure wiring ---
     settings = DatabaseSettings()
@@ -44,7 +55,7 @@ def run_synch_profiles(segment_name: str) -> int:
     )
 
     # --- Execute ---
-    synced_count = sync_service.sync_segment(segment_name)
+    synced_count = sync_service.sync_segment(tenant_id, segment_id , segment_name, last_sync_ts)
 
     logger.info(
         "Sync completed for segment '%s'. Profiles synced: %d",

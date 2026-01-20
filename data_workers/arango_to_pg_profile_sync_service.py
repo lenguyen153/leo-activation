@@ -1,4 +1,5 @@
 import logging
+from typing import Optional
 from data_models.pg_profile import PGProfileUpsert
 from data_workers.arango_profile_repository import ArangoProfileRepository
 from data_workers.pg_profile_repository import PGProfileRepository
@@ -16,11 +17,25 @@ class ArangoToPostgresSyncService:
         self.pg_repo = pg_repo
         self.tenant_id = tenant_id
 
-    def sync_segment(self, segment_name: str) -> int:
-        profiles = self.arango_repo.fetch_profiles_by_segment(segment_name)
+    def sync_segment(self, segment_name: str, tenant_id: Optional[str] = None, 
+                        segment_id: Optional[str] = None,                       
+                        last_sync_ts: Optional[str] = None) -> int:
+        """
+        sync profiles of a given segment from ArangoDB into PostgreSQL.
+        
+        Args:
+            tenant_id: The tenant identifier.
+            segment_id: The segment identifier (optional).
+            segment_name: The segment name (optional).
+            last_sync_ts: The timestamp of the last sync (optional).
+        Returns:
+            int: The number of profiles synced.
+        """
+        
+        cdp_profiles = self.arango_repo.fetch_profiles_by_segment(segment_name)
 
         count = 0
-        for p in profiles:
+        for p in cdp_profiles:
             raw_attributes = {
                 "dataLabels": ["test"]
             }

@@ -1,119 +1,118 @@
-import json
 import logging
+import os
 from datetime import datetime, timezone
+from typing import Optional
+
 import redis
 from celery import shared_task
-from data_workers.database import get_pg_connection, get_arango_db
-import os
+
+from data_workers.sync_segment_profiles import run_synch_profiles
 from main_configs import CELERY_REDIS_URL
 
-# Setup Logger
+# --------------------------------------------------
+# Setup
+# --------------------------------------------------
+
 logger = logging.getLogger(__name__)
 
-# Redis for storing the "Last Sync Timestamp" state
 redis_client = redis.from_url(CELERY_REDIS_URL)
-LAST_SYNC_KEY = "leo_cdp:last_sync_time"
-DEFAULT_TENANT_ID = os.getenv("DEFAULT_TENANT_ID")
 
-@shared_task
-def sync_profiles_task():
+DEFAULT_TENANT_ID = os.getenv("DEFAULT_TENANT_ID", "default")
+
+
+def _build_last_sync_key(
+    *,
+    tenant_id: str,
+    segment_id: Optional[str] = None,
+    segment_name: Optional[str] = None,
+) -> str:
     """
-    Incremental Sync: Fetches updated profiles from ArangoDB and Upserts to Postgres.
+    Build a deterministic Redis key for incremental sync checkpoints.
     """
-    logger.info("Starting ArangoDB -> PGSQL Sync...")
-    
-    # 1. Get Last Sync Time from Redis (or default to epoch if first run)
-    last_sync_ts = redis_client.get(LAST_SYNC_KEY)
+    if segment_id:
+        return f"leo_cdp:{tenant_id}:segment:{segment_id}:last_sync"
+    return f"leo_cdp:{tenant_id}:segment_name:{segment_name}:last_sync"
+
+
+# --------------------------------------------------
+# Celery Task
+# --------------------------------------------------
+
+@shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=30, retry_kwargs={"max_retries": 3})
+def sync_profiles_task(
+    self,
+    *,
+    segment_id: Optional[str] = None,
+    segment_name: Optional[str] = None,
+    tenant_id: Optional[str] = None,
+) -> None:
+    """
+    Incremental Sync Task
+    - Sync profiles by segment_id OR segment_name
+    - Exactly one must be provided
+    """
+
+    tenant_id = tenant_id or DEFAULT_TENANT_ID
+
+    # --------------------------------------------------
+    # Validation (fail fast, fail loud)
+    # --------------------------------------------------
+
+    if bool(segment_id) == bool(segment_name):
+        raise ValueError(
+            "Exactly one of `segment_id` or `segment_name` must be provided."
+        )
+
+    logger.info(
+        "Starting profile sync | tenant=%s | segment_id=%s | segment_name=%s",
+        tenant_id,
+        segment_id,
+        segment_name,
+    )
+
+    # --------------------------------------------------
+    # Load last checkpoint
+    # --------------------------------------------------
+
+    last_sync_key = _build_last_sync_key(
+        tenant_id=tenant_id,
+        segment_id=segment_id,
+        segment_name=segment_name,
+    )
+
+    last_sync_ts = redis_client.get(last_sync_key)
     if last_sync_ts:
-        last_sync_ts = last_sync_ts.decode('utf-8')
+        last_sync_ts = last_sync_ts.decode("utf-8")
     else:
         last_sync_ts = "1970-01-01T00:00:00Z"
 
-    # Capture current time for the next checkpoint
     current_run_time = datetime.now(timezone.utc).isoformat()
 
-    # 2. Fetch Data from ArangoDB (Incremental)
-    # Assuming your Arango collection is 'profiles' and has an 'updated_at' field
-    arango_db = get_arango_db()
-    aql_query = """
-    FOR doc IN profiles
-        FILTER doc.updated_at >= @last_sync
-        LIMIT 1000
-        RETURN doc
-    """
-    
-    # Execute AQL query
-    cursor = arango_db.aql.execute(aql_query, bind_vars={'last_sync': last_sync_ts})
-    batch_data = [doc for doc in cursor]
+    logger.info("Last sync timestamp: %s", last_sync_ts)
 
-    if not batch_data:
-        logger.info("No new data found in ArangoDB.")
-        return "No updates"
-
-    logger.info(f"Fetched {len(batch_data)} records to sync.")
-
-    # 3. Upsert into PostgreSQL
-    upsert_sql = """
-    INSERT INTO cdp_profiles (
-        tenant_id, 
-        ext_id, 
-        email, 
-        first_name, 
-        last_name, 
-        mobile_number, 
-        raw_attributes,
-        updated_at
-    ) VALUES (
-        %s, %s, %s, %s, %s, %s, %s, NOW()
-    )
-    ON CONFLICT (tenant_id, ext_id) 
-    DO UPDATE SET
-        email = EXCLUDED.email,
-        first_name = EXCLUDED.first_name,
-        last_name = EXCLUDED.last_name,
-        mobile_number = EXCLUDED.mobile_number,
-        raw_attributes = EXCLUDED.raw_attributes,
-        updated_at = NOW();
-    """
+    # --------------------------------------------------
+    # Execute sync
+    # --------------------------------------------------
 
     try:
-        with get_pg_connection() as conn:
-            with conn.cursor() as cur:
-                # Enable RLS context
-                cur.execute("SET app.current_tenant_id = %s", (DEFAULT_TENANT_ID,))
+        run_synch_profiles(
+            segment_id=segment_id,
+            segment_name=segment_name,
+            tenant_id=tenant_id,
+            last_sync_ts=last_sync_ts,
+        )
 
-                for doc in batch_data:
-                    # Map ArangoDB fields to PG Schema
-                    # '_key' in Arango is usually the best candidate for 'ext_id'
-                    ext_id = doc.get('_key') 
-                    
-                    # Extract typed fields
-                    email = doc.get('email')
-                    first_name = doc.get('firstName')
-                    last_name = doc.get('lastName')
-                    phone = doc.get('phone') or doc.get('mobile')
+        # --------------------------------------------------
+        # Persist checkpoint ONLY on success
+        # --------------------------------------------------
+        redis_client.set(last_sync_key, current_run_time)
 
-                    # Dump the ENTIRE doc into raw_attributes so we don't lose data
-                    raw_attributes = json.dumps(doc)
+        logger.info(
+            "Sync completed | tenant=%s | segment=%s",
+            tenant_id,
+            segment_id or segment_name,
+        )
 
-                    # Execute Upsert
-                    cur.execute(upsert_sql, (
-                        DEFAULT_TENANT_ID,
-                        ext_id,
-                        email,
-                        first_name,
-                        last_name,
-                        phone,
-                        raw_attributes
-                    ))
-            
-            conn.commit()
-            
-        # 4. Update Checkpoint in Redis
-        redis_client.set(LAST_SYNC_KEY, current_run_time)
-        logger.info(f"Sync complete. Next run will fetch data after {current_run_time}")
-        return f"Synced {len(batch_data)} records"
-
-    except Exception as e:
-        logger.error(f"Sync failed: {e}")
-        raise e
+    except Exception as exc:
+        logger.exception("Profile sync failed")
+        raise exc

@@ -11,7 +11,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
-logger = logging.getLogger("Agent-Weather")
+logger = logging.getLogger("agentic_tools.weather_tools")
 
 # ============================================================
 # Canonical aliases

@@ -2,7 +2,7 @@
 import logging
 from typing import List
 
-from data_models.arango_profile import ArangoProfile, SegmentRef
+from data_models.arango_profile import CDP_PROFILE_QUERY, ArangoProfile
 
 
 logger = logging.getLogger(__name__)
@@ -36,16 +36,9 @@ class ArangoProfileRepository:
             logger.warning("[ArangoDB] Segment not found: %s", segment_name)
             return []
 
-        query = """
-        FOR p IN cdp_profile
-            FILTER @segment_id IN p.inSegments[*].id
-            FILTER (p.primaryEmail != null AND p.primaryEmail != "")
-            OR (p.primaryPhone != null AND p.primaryPhone != "")
-            RETURN p
-        """
 
         cursor = self.db.aql.execute(
-            query, bind_vars={"segment_id": segment_id}
+            CDP_PROFILE_QUERY, bind_vars={"segment_id": segment_id}
         )
 
         profiles: List[ArangoProfile] = []

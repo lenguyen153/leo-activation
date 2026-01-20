@@ -1,16 +1,37 @@
 import logging
-from typing import Dict, Literal, Any
+from typing import Dict, Literal, Any, Optional
 
 # Configure logger
-logger = logging.getLogger("agentic_tools.leo")
+logger = logging.getLogger("agentic_tools.customer_data")
 
 
-def manage_leo_segment(
+def show_all_segments(tenant_id: Optional[str] = None) -> Dict[str, str]:
+    """
+    show all segments in the CDP for the given tenant.
+
+    Args:
+        tenant_id: the unique identifier for the tenant. If None, defaults to the current tenant.
+
+    Returns:
+        A list of segments with their IDs and names.
+    """
+
+    logger.info("show all segments in the CDP for the given tenant_id: %s", tenant_id)
+
+    segments = [{"segment_id": "seg_001", "name": "New Users"},
+                {"segment_id": "seg_002", "name": "High Value Customers"},
+                {"segment_id": "seg_003", "name": "Inactive Users"},
+                {"segment_id": "seg_004", "name": "Frequent Buyers"},
+                {"segment_id": "seg_005", "name": "Newsletter Subscribers"}
+                ]
+    return segments
+
+def manage_cdp_segment(
     segment_identifier: str,
     action: Literal["create", "update", "delete"] = "create"
 ) -> Dict[str, Any]:
     """
-    Manages the lifecycle of a customer segment in LEO CDP.
+    Manages the lifecycle of a customer segment in CDP.
 
     This function allows you to create new segments, update existing definitions,
     or delete segments that are no longer needed.
@@ -28,7 +49,7 @@ def manage_leo_segment(
         the resolved segment ID, and a human-readable message.
     """
     # Log the incoming request
-    logger.info("Tool 'manage_leo_segment' called: segment='%s', action='%s'",
+    logger.info("Tool 'manage_cdp_segment' called: segment='%s', action='%s'",
                 segment_identifier, action)
 
     # 1. Input Sanitization
@@ -40,7 +61,7 @@ def manage_leo_segment(
     if clean_action not in valid_actions:
         error_msg = f"Invalid action '{action}'. Must be one of: {valid_actions}"
         logger.warning(
-            "Tool 'manage_leo_segment' validation failed: %s", error_msg)
+            "Tool 'manage_cdp_segment' validation failed: %s", error_msg)
         return {
             "status": "error",
             "message": error_msg
@@ -63,16 +84,16 @@ def manage_leo_segment(
         }
 
         logger.info(
-            "Tool 'manage_leo_segment' completed successfully for '%s'", clean_segment)
+            "Tool 'manage_cdp_segment' completed successfully for '%s'", clean_segment)
         return result
 
     except Exception as e:
-        logger.exception("Unexpected error in manage_leo_segment")
+        logger.exception("Unexpected error in manage_cdp_segment")
         return {
             "status": "error",
             "message": f"An internal error occurred: {str(e)}"
         }
 
 # Examples of usage:
-# manage_leo_segment("VIP Users", action="create")
-# manage_leo_segment("seg_999", action="delete")
+# manage_cdp_segment("VIP Users", action="create")
+# manage_cdp_segment("seg_999", action="delete")

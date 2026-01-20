@@ -33,7 +33,7 @@ These ensure the model can call simple tools correctly without hallucinating LEO
 
 ### **Group 2: LEO CDP Segmentation**
 
-These test the `manage_leo_segment` tool, ensuring the model extracts criteria and names correctly.
+These test the `manage_cdp_segment` tool, ensuring the model extracts criteria and names correctly.
 
 **3. Simple Segmentation**
 *Tests creation with explicit time window.*

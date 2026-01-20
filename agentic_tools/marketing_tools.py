@@ -8,7 +8,7 @@ from agentic_tools.channels.push_notification import MobilePushChannel, WebPushC
 from agentic_tools.channels.zalo import ZaloOAChannel
 from agentic_tools.channels.email import EmailChannel
 
-logger = logging.getLogger("agentic_tools.marketing")
+logger = logging.getLogger("agentic_tools.marketing_tools")
 
 # ============================================================
 # Global Channel Registry
@@ -192,3 +192,27 @@ def activate_channel(
             "message": str(e),
             "hint": f"Ensure channel is one of {ActivationManager.list_channels()}"
         }
+        
+
+def get_marketing_events(tenant_id: Optional[str] = None) -> Dict[str, str]:
+    """
+    show all marketing events for the given tenant.
+
+    Args:
+        tenant_id: the unique identifier for the tenant. If None, defaults to the current tenant.
+
+    Returns:
+        A list of marketing events with their IDs and names.
+    """
+
+    logger.info("show all marketing events for the given tenant_id: %s", tenant_id)
+
+    # TODO: Replace with real API call to fetch marketing events
+    marketing_events = [{"event_id": "me_001", "name": "Summer Sale 2026"},
+                        {"event_id": "me_002", "name": "Black Friday 2026"},
+                        {"event_id": "me_003", "name": "New Year Promo 2026"},
+                        {"event_id": "me_004", "name": "Back to School 2026"},
+                        {"event_id": "me_005", "name": "Holiday Specials 2026"},
+                        {"event_id": "me_006", "name": "Flash Deals 2026"}
+                ]
+    return marketing_events

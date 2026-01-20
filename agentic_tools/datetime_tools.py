@@ -1,9 +1,12 @@
 from datetime import date, datetime
+import logging
 from typing import Dict, Optional
+
+logger = logging.getLogger("agentic_tools.datetime")
 
 def get_date(input_date: Optional[str] = None) -> Dict[str, str]:
     """
-    Retrieves the current server date and time.
+    Get date or retrieves the current server date and time.
     
     Use this tool when the user asks questions involving "today", "now", 
     or requires the current date to calculate relative dates (e.g., "next Friday").

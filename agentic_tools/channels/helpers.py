@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 # HTML Templates
 # ============================================================
 BASE_DIR = Path(__file__).parent.parent.parent
-TEMPLATE_PATH = BASE_DIR / "agentic_resources" / "msg_templates" / "thank-you.html"
+TEMPLATE_PATH = BASE_DIR / "agentic_resources" / "message_templates" / "thank-you.html"
 
 def load_html_template(file_path: Path) -> str:
     """Safely loads HTML template or returns a fallback string."""

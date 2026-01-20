@@ -7,15 +7,16 @@ import random
 from typing import Dict, Any, Optional, Tuple
 
 from agentic_tools.channels.activation import NotificationChannel
+from data_utils.arango_client import get_arango_db
 from data_workers.cdp_db_utils import get_user_contact_from_cdp
 from main_configs import MarketingConfigs
 
 
-from data_workers.database import get_arango_db
-
 logger = logging.getLogger(__name__)
 
 class ZaloOAChannel(NotificationChannel):
+    
+    
 
     # Constants for DB Lookup
     CONNECTOR_NAME = "LEO Zalo Connector"
@@ -23,6 +24,8 @@ class ZaloOAChannel(NotificationChannel):
 
     def __init__(self, override_token: str = None):
         # -------- Database Connection --------
+        # FIXME profile must load from PGSQL later
+        
         try:
             self.db = get_arango_db()
         except Exception as e:

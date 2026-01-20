@@ -1,51 +1,53 @@
 import json
+import logging
 from typing import Any, Dict, List, Optional
 
+# Assuming these are your existing wrappers
 from agentic_models.function_gemma import FunctionGemmaEngine
 from agentic_models.gemini import GeminiEngine
 
-def build_messages(prompt):
-    messages = [
-        {
-            "role": "system",
-            "content": (
-                "You are LEO, an expert CDP assistant. "
-                "Your goal is to understand the user's intent and act using the available tools.\n"
-                "\n"
-                "### GUIDELINES:\n"
-                "1. **Analyze First:** Always output a short 'Thought:' explaining your reasoning.\n"
-                "2. **Stop & Act:** After your thought, if a tool is needed, trigger it immediately. Do not write 'Tool: ...' in text.\n"
-                "3. **Parameter Mapping Rules:**\n"
-                "   - 'Zalo' or 'Zalo OA' -> channel='zalo_oa'\n"
-                "   - 'Facebook' -> channel='facebook_page'\n"
-                "   - 'Push' -> channel='mobile_push'\n"
-                "   - Segment names must be extracted exactly as written (including spaces).\n"
-                "\n"
-                "### EXAMPLES:\n"
-                "User: 'Sync the VIP segment to Facebook Ads'\n"
-                "Thought: The user wants to activate the 'VIP' segment. The channel 'Facebook Ads' maps to 'facebook_page'.\n"
-                "\n"
-                "User: 'Send thank you notification to segment \"Users with phone number to test\" via Zalo'\n"
-                "Thought: Intent is activation. Segment is 'Users with phone number to test'. Channel 'Zalo' maps to 'zalo_oa'. Message content is implied as 'Thank you notification'.\n"
-                "\n"
-                "User: 'Is it raining in Hanoi?'\n"
-                "Thought: User needs weather info for Hanoi. I will use the weather tool.\n"
-            ),
-        },
-        {
-            "role": "user",
-            "content": prompt
-        },
-    ]
-    return messages
+# Configure Logging
+logger = logging.getLogger("leo_router")
+logger.setLevel(logging.INFO)
+
+def build_system_prompt(model_type: str = "gemini") -> str:
+    """
+    Returns the appropriate system prompt based on the model.
+    
+    According to FunctionGemma docs:
+    - Turn 1 must be a 'developer' role defining tools.
+    - The specific trigger phrase "You are a model that can do function calling..." is required.
+    """
+    if model_type == "gemma":
+        # STRICT FunctionGemma requirement:
+        # We do not add the "LEO" persona here. Gemma's only job is to route.
+        # The 'developer' role and tool definitions are handled by the FunctionGemmaEngine 
+        # using the `tools` list provided at runtime.
+        # This string acts as the "context" before tool definitions.
+        return "You are a model that can do function calling with the following functions."
+    
+    else:
+        # GEMINI / SYNTHESIS Prompt
+        # This is where the LEO persona lives.
+        return (
+            "You are LEO, an expert CDP assistant. "
+            "You have received the results of technical tool executions. "
+            "Your goal is to synthesize these results into a helpful, natural language response "
+            "for the user in their language (Vietnamese/English).\n"
+            "\n"
+            "### GUIDELINES:\n"
+            "1. **Be Helpful:** Explain what action was taken clearly.\n"
+            "2. **Tone:** Professional, concise, and empathetic.\n"
+        )
 
 class AgentRouter:
-    """High-level agent that orchestrates tool intent detection, execution, and synthesis.
-
-    Methods
-    -------
-    handle_message(messages, tools, tools_map)
-        Run the full pipeline and return {'answer': str, 'debug': {'calls': [...], 'data': [...]}}
+    """
+    High-level agent orchestrator.
+    
+    Architecture:
+    1. User Query -> FunctionGemma (Router) -> Generates <start_function_call>...
+    2. Execute Tools -> Get Results
+    3. Results + History -> Gemini (Synthesizer) -> Natural Language Answer
     """
 
     def __init__(self, mode: str = "auto"):
@@ -53,104 +55,212 @@ class AgentRouter:
         self.gemma = FunctionGemmaEngine()
         self.gemini = GeminiEngine()
 
-    def generate(self, messages: List[Dict[str, Any]], tools: Optional[List[Any]] = None) -> str:
-        """Compatibility wrapper: select appropriate model based on mode and tools."""
-        if self.mode == "gemma":
-            return self.gemma.generate(messages, tools)
-        if self.mode == "gemini":
-            return self.gemini.generate(messages, tools)
-        # AUTO
-        if tools:
-            return self.gemma.generate(messages, tools)
-        return self.gemini.generate(messages, tools)
+    def handle_tool_calling(
+        self,
+        tool_calling_json: Dict[str, Any],
+        tools: Optional[List[Any]] = None,
+        tools_map: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Directly executes a specific tool call and synthesizes the result via Gemini.
+        Bypasses the intent detection (Gemma) step.
 
+        Args:
+            tool_calling_json: Dict like {"tool_name": "...", "args": {...}}
+            tools: List of tool definitions (optional, for compatibility)
+            tools_map: Mapping of tool names to functions
 
-    def handle_message(self, messages: List[Dict[str, Any]], tools: Optional[List[Any]] = None, tools_map: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        Returns:
+            Dict matching the standard response format: {'answer': ..., 'debug': ...}
+        """
         tools_map = tools_map or {}
-
-        # 1. Intent detection via FunctionGemma
-        # The model will output: "Thought: ... <start_function_call>..."
-        raw_output = self.gemma.generate(messages, tools)
         
-        # Parse the output: Split "Thought" from "Function Call" tags
-        # (This is just for clean logging)
-        thought_text = raw_output.split("<start_function_call>")[0].strip()
-        print(f"Agent Thought: {thought_text}")
-
-        # Extract tool calls from FunctionGemma's output
-        tool_calls = self.gemma.extract_tool_calls(raw_output) or []
+        tool_name = tool_calling_json.get("tool_name")
+        args = tool_calling_json.get("args", {})
         
-        debug_calls = []
+        logger.info(f"🔧 Direct tool execution requested: {tool_name}")
+        
+        debug_calls = [{"name": tool_name, "arguments": args}]
         debug_results = []
+        result_content = ""
 
-        # 2. Case A: No tools -> semantic reply via Gemini
-        # If Gemma didn't call a tool, we hand off to Gemini for a better conversational reply
-        if not tool_calls:
-            print("No tool calls detected, using Gemini for direct answer.")
-            # We pass the thought as context to Gemini so it knows what happened
-            if thought_text:
-                messages.append({"role": "assistant", "content": thought_text})
-            
-            answer = self.gemini.generate(messages, tools)
-            return {"answer": answer, "debug": {"calls": [], "data": []}}
+        # 1. Execute the Tool
+        if tool_name not in tools_map:
+            error_msg = f"Tool '{tool_name}' not registered in tools_map."
+            logger.error(error_msg)
+            result_content = json.dumps({"error": error_msg})
+        else:
+            try:
+                print(f"  [>] Calling: {tool_name}")
+                func_result = tools_map[tool_name](**args)
+                print(f"  [✓] Success.")
+                result_content = json.dumps(func_result, default=str)
+            except Exception as exc:
+                print(f"  [!] Exception: {exc}")
+                result_content = json.dumps({"error": str(exc)})
 
-        # 3. Case B: Execute Tools
-        # Add the assistant's decision to history (CRITICAL for multi-turn)
-        messages.append({
-            "role": "assistant", 
-            "content": raw_output # Contains both thought and function tokens
+        debug_results.append({"name": tool_name, "response": result_content})
+
+        # 2. Synthesize Result via Gemini
+        # We construct a synthetic history so Gemini understands what happened.
+        # System -> User (Synthetic Context) -> Tool Output
+        
+        synthesis_messages = [
+            {"role": "system", "content": build_system_prompt("gemini")},
+            {
+                "role": "user", 
+                "content": f"Execute the tool '{tool_name}' with arguments {args} and report the result."
+            },
+            {
+                "role": "tool",
+                "name": tool_name,
+                "content": result_content
+            }
+        ]
+
+        print("📝 Synthesizing answer via Gemini...")
+        final_answer = self.gemini.generate(synthesis_messages, tools) or ""
+        final_answer = final_answer.strip()
+
+        if not final_answer:
+            final_answer = "Tool execution complete. (No summary generated)"
+
+        return {
+            "answer": final_answer,
+            "debug": {"calls": debug_calls, "data": debug_results},
+        }
+
+    def handle_message(
+        self, 
+        messages: List[Dict[str, Any]], 
+        tools: Optional[List[Any]] = None, 
+        tools_map: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        
+        tools_map = tools_map or {}
+        
+        # --- STEP 1: PREPARE FOR ROUTING (FunctionGemma) ---
+        # FunctionGemma is sensitive. We ensure the prompt is pure.
+        # We strip previous system messages if they don't match the tool-calling requirement.
+        router_messages = [m for m in messages if m["role"] != "system"]
+        
+        # Add the specific Developer trigger expected by FunctionGemma
+        # Note: Your FunctionGemmaEngine likely handles the actual <start_of_turn>developer wrapping
+        router_messages.insert(0, {
+            "role": "system", # or "developer" depending on your engine's template mapping
+            "content": build_system_prompt("gemma")
         })
 
+        # --- STEP 2: INTENT DETECTION ---
+        logger.info("🤖 Routing via FunctionGemma...")
+        # raw_output will contain: <start_function_call>call:func{arg:<escape>val<escape>}...
+        raw_output = self.gemma.generate(router_messages, tools)
+        
+        # Debug logging
+        logger.debug(f"Raw Model Output: {raw_output}")
+
+        # Extract tool calls (Engine must handle <escape> parsing!)
+        tool_calls = self.gemma.extract_tool_calls(raw_output) or []
+        
+        # Check for "Thoughts" (Text before the function call)
+        # FunctionGemma isn't explicitly trained for "Thoughts", but if they occur, capture them.
+        thought_text = ""
+        if "<start_function_call>" in raw_output:
+            thought_text = raw_output.split("<start_function_call>")[0].strip()
+        elif not tool_calls:
+            thought_text = raw_output.strip()
+
+        if thought_text:
+            print(f"Agent Thought: {thought_text}")
+
+        # --- STEP 3: EXECUTION OR DIRECT REPLY ---
+        debug_calls = []
+        debug_results = []
+        
+        # CASE A: No tools triggered -> Hand off to Gemini for conversation
+        if not tool_calls:
+            print("ℹ️ No tool calls detected. Switching to Gemini for chat.")
+            
+            # Re-build messages with the LEO Persona for Gemini
+            chat_messages = [
+                {"role": "system", "content": build_system_prompt("gemini")}
+            ] + [m for m in messages if m["role"] != "system"]
+            
+            # If Gemma had a thought, pass it as context
+            if thought_text:
+                chat_messages.append({"role": "assistant", "content": thought_text})
+                
+            answer = self.gemini.generate(chat_messages)
+            return {"answer": answer, "debug": {"calls": [], "data": []}}
+
+        # CASE B: Execute Tools
         print(f"\n🛠️  TRIGGERED {len(tool_calls)} TOOL(S):")
+        
+        # According to doc: Turn 3 is the Model outputting the call
+        # We add this to history so Gemini knows what happened
+        messages.append({
+            "role": "assistant",
+            "content": raw_output # Contains the <start_function_call> tokens
+        })
 
         tool_outputs_for_llm = []
-        final_summary_lines = []
 
         for call in tool_calls:
             name = call["name"]
             args = call.get("arguments", {})
             
-            # --- PRINT DETAILED DEBUG INFO ---
             print(f"  [>] Calling: {name}")
-            print(f"  [i] Args:    {json.dumps(args, indent=2)}")
-
             debug_calls.append({"name": name, "arguments": args})
 
+            result_content = ""
+            
             if name not in tools_map:
-                result = {"error": f"Tool '{name}' not registered"}
-                print(f"  [X] Error: Tool not found")
+                error_msg = f"Tool '{name}' not registered in tools_map."
+                print(f"  [X] Error: {error_msg}")
+                result_content = json.dumps({"error": error_msg})
             else:
                 try:
-                    result = tools_map[name](**args)
-                    print(f"  [✓] Success. Result: {str(result)[:100]}...") # Print first 100 chars
+                    # Execute python function
+                    func_result = tools_map[name](**args)
+                    print(f"  [✓] Success.")
+                    
+                    # Convert to JSON string
+                    result_content = json.dumps(func_result, default=str)
                 except Exception as exc:
-                    result = {"error": str(exc)}
                     print(f"  [!] Exception: {exc}")
+                    result_content = json.dumps({"error": str(exc)})
 
-            debug_results.append({"name": name, "response": result})
+            debug_results.append({"name": name, "response": result_content})
 
-            # Format specifically for FunctionGemma/Gemini tool role
+            # Format for LLM History (Standard Chat Format)
+            # Your GeminiEngine will likely convert this to standard user/model turns
+            # or FunctionGemma would convert this to <start_function_response>
             tool_outputs_for_llm.append({
                 "role": "tool",
                 "name": name,
-                "content": json.dumps(result, default=str),
+                "content": result_content
             })
 
-            status = "Success" if "error" not in result else "Failed"
-            final_summary_lines.append(f"- Action: {name}\n  Status: {status}\n  Output: {result}")
-
+        # Append execution results to history
         messages.extend(tool_outputs_for_llm)
-        
-        # 4. Final synthesis
-        # We ask Gemini to summarize the result because it writes better English/Vietnamese than Gemma 2b
-        final_answer = (self.gemini.generate(messages, tools) or "").strip()
 
-        print("\n✅ Execution Complete. Skipping final LLM synthesis.")
+        # --- STEP 4: FINAL SYNTHESIS (Gemini) ---
+        # We switch to Gemini here because FunctionGemma is "Single Turn" optimized
+        # and we want a rich conversational response.
         
-        if len(final_answer) < 10:
-            # If the final answer is too short, we assume LLM synthesis failed
-            # Instead, we build a simple report of tool executions
-            final_answer = "### Tool Execution Report\n" + "\n".join(final_summary_lines)
+        print("📝 Synthesizing answer via Gemini...")
+        
+        # Replace the FunctionGemma system prompt with the LEO Persona
+        # This ensures the final answer sounds like LEO, not a raw robot.
+        final_messages = [
+            {"role": "system", "content": build_system_prompt("gemini")}
+        ] + [m for m in messages if m["role"] != "system"]
+
+        final_answer = self.gemini.generate(final_messages, tools) or ""
+        final_answer = final_answer.strip()
+
+        if not final_answer:
+            final_answer = "Analysis complete. (No summary generated)"
 
         return {
             "answer": final_answer,
