@@ -44,7 +44,7 @@ def run_synch_profiles(segment_name: Optional[str] = None,
     tenant_id = resolve_and_set_default_tenant(pg_conn)
 
     # --- Repositories ---
-    arango_repo = ArangoProfileRepository(arango_db)
+    arango_repo = ArangoProfileRepository(arango_db, batch_size=500)
     pg_repo = PGProfileRepository(pg_conn)
 
     # --- Service ---

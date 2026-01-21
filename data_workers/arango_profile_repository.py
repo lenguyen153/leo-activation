@@ -9,8 +9,9 @@ logger = logging.getLogger(__name__)
 
 
 class ArangoProfileRepository:
-    def __init__(self, db):
+    def __init__(self, db, batch_size: int = 1000):
         self.db = db
+        self.batch_size = batch_size
 
     def resolve_segment_id(self, segment_name: str) -> str | None:
         query = """
@@ -23,7 +24,7 @@ class ArangoProfileRepository:
         cursor = self.db.aql.execute(query, bind_vars={"name": segment_name})
         return next(iter(cursor), None)
 
-    def fetch_profiles_by_segment(self, segment_id: Optional[str] = None, segment_name: Optional[str] = None) -> List[ArangoProfile]:
+    def fetch_profiles_by_segment(self, segment_id: Optional[str] = None, segment_name: Optional[str] = None, start_index: int = 0) -> List[ArangoProfile]:
         if not segment_id and segment_name:
             segment_id = self.resolve_segment_id(segment_name)
             logger.info(
@@ -38,7 +39,7 @@ class ArangoProfileRepository:
 
 
         cursor = self.db.aql.execute(
-            CDP_PROFILE_QUERY, bind_vars={"segment_id": segment_id}
+            CDP_PROFILE_QUERY, bind_vars={"segment_id": segment_id, "batch_size": self.batch_size, "start_index": start_index}
         )
 
         profiles: List[ArangoProfile] = []

@@ -18,7 +18,7 @@ class JourneyRef(BaseModel):
 
 
 class Touchpoint(BaseModel):
-    _key: str
+    id: str
     hostname: str
     name: str
     url: str
@@ -188,7 +188,7 @@ class ArangoProfile(BaseModel):
             # --- touchpoints ---
             topEngagedTouchpoints=[
                 Touchpoint(
-                    _key=t.get("_key"),
+                    id=t.get("id"),
                     hostname=t.get("hostname"),
                     name=t.get("name"),
                     url=t.get("url"),
@@ -216,13 +216,15 @@ CDP_PROFILE_QUERY = """
             FOR t IN cdp_touchpoint
                 FILTER t._key IN p.topEngagedTouchpointIds
                 RETURN {
-                    _key: t._key,
+                    id: t._key,
                     hostname: t.hostname,
                     name: t.name,
                     url: t.url,
                     parentId: t.parentId
                 }
         )
+        
+        LIMIT @start_index, @batch_size
 
         RETURN {
             _key: p._key,
