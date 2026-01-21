@@ -18,7 +18,7 @@ TARGET_DB="leo_activation_db"
 HOST_PORT=5435
 
 # --- SQL schema config ---
-SCHEMA_VERSION=260114
+SCHEMA_VERSION=260121
 SCHEMA_DESCRIPTION="upgrade marketing_event + AI embedding pipeline"
 SQL_FILE_PATH="./sql-scripts/schema.sql"
 
@@ -133,15 +133,25 @@ if [ "$DB_EXISTS" != "1" ]; then
 fi
 
 # ============================================================
-# Enable required extensions
+# Enable required extensions (LEO Activation schema)
 # ============================================================
-echo "🔌 Enabling extensions..."
+echo "🔌 Enabling PostgreSQL extensions..."
+
+docker exec -u postgres "$CONTAINER_NAME" psql -d "$TARGET_DB" -c \
+  "CREATE EXTENSION IF NOT EXISTS pgcrypto;"
+
 docker exec -u postgres "$CONTAINER_NAME" psql -d "$TARGET_DB" -c \
   "CREATE EXTENSION IF NOT EXISTS vector;"
+
 docker exec -u postgres "$CONTAINER_NAME" psql -d "$TARGET_DB" -c \
-  "CREATE EXTENSION IF NOT EXISTS postgis;"
+  "CREATE EXTENSION IF NOT EXISTS citext;"
+
 docker exec -u postgres "$CONTAINER_NAME" psql -d "$TARGET_DB" -c \
   "CREATE EXTENSION IF NOT EXISTS age;"
+
+docker exec -u postgres "$CONTAINER_NAME" psql -d "$TARGET_DB" -c \
+  "CREATE EXTENSION IF NOT EXISTS postgis;"
+
 
 # ============================================================
 # Configure Search Path for AGE (Critical)
@@ -188,16 +198,48 @@ fi
 # ============================================================
 # Verify critical tables (marketing + AI)
 # ============================================================
+# ============================================================
+# Verify critical tables (LEO Activation: Marketing + AI + System)
+# Database: PostgreSQL 16+
+# ============================================================
+
 TABLES=(
+  # --- Core / Tenant ---
   tenant
+
+  # --- CDP ---
+  cdp_profiles
+
+  # --- Campaign & Marketing ---
+  campaign
   marketing_event
+  segment_snapshot
+  segment_snapshot_member
+
+  # --- Alert Center / Market Data ---
+  instruments
+  market_snapshot
+  alert_rules
+  news_feed
+
+  # --- AI / Agent ---
+  agent_task
   embedding_job
+
+  # --- Execution / Delivery ---
+  delivery_log
+
+  # --- Behavioral Feedback Loop ---
+  behavioral_events
+
+  # --- System ---
   schema_migrations
 )
 # Note: ag_catalog tables (ag_graph, ag_label) exist but are hidden in ag_catalog schema
 
-echo "🔍 Verifying tables..."
+echo "🔍 Verifying all tables in $TARGET_DB..."
 for table in "${TABLES[@]}"; do
+  echo "Verifying table: $table"
   docker exec -u postgres "$CONTAINER_NAME" psql -d "$TARGET_DB" -tc \
     "SELECT 1 FROM pg_tables WHERE tablename='$table';" | grep -q 1 \
     || { echo "❌ Missing table: $table (Check schema.sql)"; }

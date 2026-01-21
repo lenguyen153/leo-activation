@@ -1,5 +1,9 @@
 from typing import Any, Dict, List, Optional
-from pydantic import BaseModel, EmailStr, Field, ConfigDict
+from pydantic import BaseModel, EmailStr, Field, ConfigDict, field_validator
+import re
+
+
+_PHONE_RE = re.compile(r"^\+?[0-9]{7,15}$")
 
 
 class SegmentRef(BaseModel):
@@ -22,38 +26,119 @@ class Touchpoint(BaseModel):
 
 
 class ArangoProfile(BaseModel):
+    """
+    Read model for profiles loaded from ArangoDB.
+
+    Design rules:
+    - Never throw on bad contact data
+    - Invalid email / phone → NULL (None)
+    - Lists are filtered, not rejected
+    - extra fields are ignored safely
+    """
+
     model_config = ConfigDict(
         extra="ignore"   # ✅ silently ignore unexpected fields
     )
 
+    # =====================================================
+    # IDENTITY
+    # =====================================================
     profile_id: Optional[str] = None
     identities: List[str] = Field(default_factory=list)
 
+    # =====================================================
+    # CONTACT INFORMATION
+    # =====================================================
     primaryEmail: Optional[EmailStr] = None
     secondaryEmails: List[EmailStr] = Field(default_factory=list)
 
     primaryPhone: Optional[str] = None
     secondaryPhones: List[str] = Field(default_factory=list)
 
+    # =====================================================
+    # PERSONAL & LOCATION
+    # =====================================================
     firstName: Optional[str] = None
     lastName: Optional[str] = None
     livingLocation: Optional[str] = None
     livingCountry: Optional[str] = None
     livingCity: Optional[str] = None
 
+    # =====================================================
+    # ENRICHMENT
+    # =====================================================
     jobTitles: List[str] = Field(default_factory=list)
     dataLabels: List[str] = Field(default_factory=list)
     contentKeywords: List[str] = Field(default_factory=list)
     mediaChannels: List[str] = Field(default_factory=list)
     behavioralEvents: List[str] = Field(default_factory=list)
+
     inSegments: List[SegmentRef] = Field(default_factory=list)
     inJourneyMaps: List[JourneyRef] = Field(default_factory=list)
 
     eventStatistics: Dict[str, int] = Field(default_factory=dict)
     topEngagedTouchpoints: List[Touchpoint] = Field(default_factory=list)
 
+    # =====================================================
+    # VALIDATORS (FAIL-SOFT)
+    # =====================================================
+
+    @field_validator("primaryEmail", mode="before")
+    @classmethod
+    def sanitize_primary_email(cls, v):
+        if not v:
+            return None
+        try:
+            return EmailStr(v)
+        except Exception:
+            return None
+
+    @field_validator("secondaryEmails", mode="before")
+    @classmethod
+    def sanitize_secondary_emails(cls, v):
+        if not v:
+            return []
+        valid: List[str] = []
+        for e in v:
+            try:
+                valid.append(str(EmailStr(e)))
+            except Exception:
+                continue
+        return valid
+
+    @field_validator("primaryPhone", mode="before")
+    @classmethod
+    def sanitize_primary_phone(cls, v):
+        if not v:
+            return None
+        v = v.strip()
+        if _PHONE_RE.match(v):
+            return v
+        return None
+
+    @field_validator("secondaryPhones", mode="before")
+    @classmethod
+    def sanitize_secondary_phones(cls, v):
+        if not v:
+            return []
+        return [
+            p.strip()
+            for p in v
+            if isinstance(p, str) and _PHONE_RE.match(p.strip())
+        ]
+
+    # =====================================================
+    # FACTORY FROM ARANGO DOCUMENT
+    # =====================================================
     @classmethod
     def from_arango(cls, doc: Dict[str, Any]) -> "ArangoProfile":
+        """
+        Build ArangoProfile from raw ArangoDB document.
+
+        Notes:
+        - Validation happens via Pydantic validators
+        - Invalid contact data is dropped silently
+        """
         return cls(
             # --- identity ---
             profile_id=doc.get("_key"),
@@ -62,7 +147,6 @@ class ArangoProfile(BaseModel):
             # --- contact ---
             primaryEmail=doc.get("primaryEmail"),
             secondaryEmails=doc.get("secondaryEmails", []),
-
             primaryPhone=doc.get("primaryPhone"),
             secondaryPhones=doc.get("secondaryPhones", []),
 
@@ -82,10 +166,7 @@ class ArangoProfile(BaseModel):
 
             # --- segmentation ---
             inSegments=[
-                SegmentRef(
-                    id=s.get("id"),
-                    name=s.get("name"),
-                )
+                SegmentRef(id=s.get("id"), name=s.get("name"))
                 for s in doc.get("inSegments", [])
                 if isinstance(s, dict)
             ],
@@ -117,6 +198,7 @@ class ArangoProfile(BaseModel):
                 if isinstance(t, dict)
             ],
         )
+
 
 
 

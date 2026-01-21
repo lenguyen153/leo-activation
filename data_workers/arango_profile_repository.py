@@ -1,6 +1,6 @@
 # repositories/arango_profile_repository.py
 import logging
-from typing import List
+from typing import List, Optional
 
 from data_models.arango_profile import CDP_PROFILE_QUERY, ArangoProfile
 
@@ -23,14 +23,14 @@ class ArangoProfileRepository:
         cursor = self.db.aql.execute(query, bind_vars={"name": segment_name})
         return next(iter(cursor), None)
 
-    def fetch_profiles_by_segment(self, segment_name: str) -> List[ArangoProfile]:
-        segment_id = self.resolve_segment_id(segment_name)
-
-        logger.info(
-            "[ArangoDB] Resolving segment ID for %s -> %s",
-            segment_name,
-            segment_id,
-        )
+    def fetch_profiles_by_segment(self, segment_id: Optional[str] = None, segment_name: Optional[str] = None) -> List[ArangoProfile]:
+        if not segment_id and segment_name:
+            segment_id = self.resolve_segment_id(segment_name)
+            logger.info(
+                "[ArangoDB] Resolving segment ID for name %s -> %s",
+                segment_name,
+                segment_id,
+            )
 
         if not segment_id:
             logger.warning("[ArangoDB] Segment not found: %s", segment_name)

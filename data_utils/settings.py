@@ -49,5 +49,5 @@ class DatabaseSettings(BaseSettings):
         return (
             f"postgresql://{self.PGSQL_DB_USER}:{encoded_password}@"
             f"{self.PGSQL_DB_HOST}:{self.PGSQL_DB_PORT}/"
-            f"{self.PGSQL_DB_NAME}?options=-c search_path%3Dag_catalog,public"
+            f"{self.PGSQL_DB_NAME}?options=-c%20search_path%3Dag_catalog,public"
         )

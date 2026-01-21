@@ -16,7 +16,7 @@ from data_workers.pg_profile_repository import PGProfileRepository
 logger = logging.getLogger(__name__)
 
 
-def run_synch_profiles(segment_name: str,
+def run_synch_profiles(segment_name: Optional[str] = None,
                        tenant_id: Optional[str] = None, 
                         segment_id: Optional[str] = None,                        
                         last_sync_ts: Optional[str] = None) -> int:

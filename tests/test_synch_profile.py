@@ -15,13 +15,13 @@ def main(argv: Optional[list[str]] = None) -> None:
 
     if not argv:
         raise SystemExit(
-            "Usage: python sync_segment_profiles.py <segment_name>"
+            "Usage: python sync_segment_profiles.py <segment_id>"
         )
 
-    segment_name = argv[0]
+    segment_id = argv[0]
 
     try:
-        run_synch_profiles(segment_name)
+        run_synch_profiles(segment_id=segment_id)
     except Exception as exc:
         logger.exception("Sync failed: %s", exc)
         raise SystemExit(1)

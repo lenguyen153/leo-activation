@@ -15,6 +15,8 @@ CREATE EXTENSION IF NOT EXISTS vector;
 CREATE EXTENSION IF NOT EXISTS citext;
 -- age: Apache AGE for Graph Database capabilities (Nodes/Edges within Postgres).
 CREATE EXTENSION IF NOT EXISTS age;
+-- postgis: Spatial data support (if needed for geo-targeting in campaigns).
+CREATE EXTENSION IF NOT EXISTS postgis;
 
 -- Load AGE functionality and set path to include graph catalog
 LOAD 'age';
@@ -58,66 +60,227 @@ BEGIN
     END IF;
 END $$;
 
+
 -- ============================================================
 -- 4. CDP PROFILES (The "User" Entity)
+-- Core unified customer profile table
+-- Source of truth synchronized from ArangoDB → PostgreSQL
 -- ============================================================
--- Represents the core customer identity.
--- ID Type: TEXT (Allows flexibility for external IDs or UUID strings)
+-- Design goals:
+--   • Lossless sync from ArangoProfile (extra fields ignored upstream)
+--   • Human-readable + AI-readable
+--   • JSON-first where cardinality is unbounded
+--   • Append-only semantics enforced at application / trigger level
+-- ============================================================
+
 CREATE TABLE IF NOT EXISTS cdp_profiles (
-    tenant_id       UUID NOT NULL REFERENCES tenant(tenant_id) ON DELETE CASCADE,
-    profile_id      TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text, 
-    ext_id          TEXT, -- External System ID (e.g., Salesforce ID, Shopify ID)
+    -- =====================================================
+    -- MULTI-TENANCY
+    -- =====================================================
+    tenant_id UUID NOT NULL
+        REFERENCES tenant(tenant_id) ON DELETE CASCADE,
+    -- Example: "8c2e6c4d-9c3b-4c8a-9b6a-9b8c0b6e2e91"
 
-    -- Contact Info (using CITEXT for case-insensitive email matching)
-    email           CITEXT,
-    mobile_number   TEXT,
-    zalo_number     TEXT,
+    -- =====================================================
+    -- CORE IDENTITY
+    -- =====================================================
+    profile_id TEXT PRIMARY KEY,
+    -- Source: Arango `_key`
+    -- Example: "U_NAM_INVESTOR"
 
-    -- Demographics
-    first_name      TEXT,
-    last_name       TEXT,
-    job_title       TEXT,
-    company_name    TEXT,
+    identities JSONB NOT NULL DEFAULT '[]'::jsonb,
+    -- All known identifiers across systems
+    -- Synced from Arango `identities`
+    -- Example:
+    -- ["crm:12345", "email:nam@gmail.com", "phone:+84901234567"]
 
-    -- Computed Data (JSONB for flexibility)
-    segments        JSONB NOT NULL DEFAULT '[]'::jsonb, -- Current active segments
-    data_labels     JSONB NOT NULL DEFAULT '[]'::jsonb, -- Tags like 'VIP', 'ChurnRisk'
-    
-    -- Audit Trail: Denormalized, append-only list of segment history
+    -- =====================================================
+    -- CONTACT INFORMATION
+    -- =====================================================
+    primary_email CITEXT,
+    -- Source: primaryEmail
+    -- Example: "nam@gmail.com"
+
+    secondary_emails JSONB NOT NULL DEFAULT '[]'::jsonb,
+    -- Source: secondaryEmails
+    -- Example: ["nam.work@gmail.com", "nam.invest@gmail.com"]
+
+    primary_phone TEXT,
+    -- Source: primaryPhone
+    -- Example: "+84901234567"
+
+    secondary_phones JSONB NOT NULL DEFAULT '[]'::jsonb,
+    -- Source: secondaryPhones
+    -- Example: ["+84908887777"]
+
+    -- =====================================================
+    -- PERSONAL & LOCATION DATA
+    -- =====================================================
+    first_name TEXT,
+    -- Source: firstName
+    -- Example: "Nam"
+
+    last_name TEXT,
+    -- Source: lastName
+    -- Example: "Nguyen"
+
+    living_location TEXT,
+    -- Source: livingLocation
+    -- Example: "Vietnam"
+
+    living_country TEXT,
+    -- Source: livingCountry
+    -- Example: "VN"
+
+    living_city TEXT,
+    -- Source: livingCity
+    -- Example: "Ho Chi Minh City"
+
+    -- =====================================================
+    -- ENRICHMENT & INTEREST SIGNALS
+    -- =====================================================
+    job_titles JSONB NOT NULL DEFAULT '[]'::jsonb,
+    -- Source: jobTitles
+    -- Example: ["Investor", "Founder"]
+
+    data_labels JSONB NOT NULL DEFAULT '[]'::jsonb,
+    -- Source: dataLabels
+    -- Example: ["VIP", "HIGH_NET_WORTH"]
+
+    content_keywords JSONB NOT NULL DEFAULT '[]'::jsonb,
+    -- Source: contentKeywords
+    -- Example: ["value investing", "dividends", "VNM"]
+
+    media_channels JSONB NOT NULL DEFAULT '[]'::jsonb,
+    -- Source: mediaChannels
+    -- Example: ["EMAIL", "ZALO", "PUSH"]
+
+    behavioral_events JSONB NOT NULL DEFAULT '[]'::jsonb,
+    -- Source: behavioralEvents (semantic labels, not raw events)
+    -- Example: ["VIEW_STOCK", "READ_NEWS", "CLICK_ALERT"]
+
+    -- =====================================================
+    -- SEGMENTATION & JOURNEYS
+    -- =====================================================
+    segments JSONB NOT NULL DEFAULT '[]'::jsonb,
+    -- Source: inSegments
+    -- Example:
+    -- [
+    --   { "id": "VIP", "name": "High Value Investor" }
+    -- ]
+
+    journey_maps JSONB NOT NULL DEFAULT '[]'::jsonb,
+    -- Source: inJourneyMaps
+    -- Example:
+    -- [
+    --   { "id": "J01", "name": "Investor Onboarding", "funnelIndex": 2 }
+    -- ]
+
     segment_snapshots JSONB NOT NULL DEFAULT '[]'::jsonb,
-    
-    -- Raw Data: Unstructured attributes ingested from sources
-    raw_attributes  JSONB NOT NULL DEFAULT '{}'::jsonb,
+    -- Historical segment membership (append-only)
+    -- Used for audit & AI learning
 
-    -- AI Personalization:
-    -- Represents user's aggregate reading history or investing interests.
-    -- Used for dot-product similarity search against News/Alerts.
+    -- =====================================================
+    -- STATISTICS & TOUCHPOINTS
+    -- =====================================================
+    event_statistics JSONB NOT NULL DEFAULT '{}'::jsonb,
+    -- Source: eventStatistics
+    -- Example:
+    -- { "VIEW": 120, "CLICK": 34, "CONVERT": 2 }
+
+    top_engaged_touchpoints JSONB NOT NULL DEFAULT '[]'::jsonb,
+    -- Source: topEngagedTouchpoints
+    -- Example:
+    -- [
+    --   {
+    --     "_key": "tp_01",
+    --     "hostname": "vnexpress.net",
+    --     "name": "Market News",
+    --     "url": "https://vnexpress.net",
+    --     "parentId": "news_group"
+    --   }
+    -- ]
+
+    -- =====================================================
+    -- PORTFOLIO SNAPSHOT (AUTHORITATIVE CURRENT STATE)
+    -- =====================================================
+    portfolio_snapshot JSONB DEFAULT '{}'::jsonb,
+    -- Example:
+    -- {
+    --   "cash_available": 200000000,
+    --   "positions": [
+    --     {
+    --       "symbol": "VNM",
+    --       "quantity": 1000,
+    --       "avg_price": 70000
+    --     }
+    --   ]
+    -- }
+
+    portfolio_risk_score NUMERIC(3,2),
+    -- Normalized risk score [0..1]
+    -- Example: 0.35
+
+    portfolio_last_evaluated_at TIMESTAMPTZ,
+    -- When AI last evaluated the portfolio
+
+    -- =====================================================
+    -- AI LONG-TERM MEMORY
+    -- =====================================================
     interest_embedding vector(1536),
+    -- Aggregated semantic embedding of long-term interests
+    -- Used for RAG, recommendations, advisory signals
 
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- =====================================================
+    -- AUDIT
+    -- =====================================================
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 
-    -- Ensure one profile per external ID per tenant
-    CONSTRAINT uq_cdp_profile_ext UNIQUE (tenant_id, ext_id)
+    ext_data JSONB NOT NULL DEFAULT '{}'::jsonb,
+
+    -- =====================================================
+    -- CONSTRAINTS
+    -- =====================================================
+    CONSTRAINT uq_cdp_profile_identity UNIQUE (tenant_id, profile_id)
 );
 
--- Trigger: Maintain updated_at
+-- ============================================================
+-- CDP_PROFILES – TRIGGERS, GUARDS, INDEXES, SECURITY
+-- ============================================================
+
+-- ------------------------------------------------------------
+-- Trigger: Maintain updated_at automatically
+-- ------------------------------------------------------------
 DO $$
 BEGIN
     IF NOT EXISTS (
-        SELECT 1 FROM pg_trigger WHERE tgname = 'trg_cdp_profiles_updated_at' AND tgrelid = 'cdp_profiles'::regclass
+        SELECT 1
+        FROM pg_trigger
+        WHERE tgname = 'trg_cdp_profiles_updated_at'
+          AND tgrelid = 'cdp_profiles'::regclass
     ) THEN
-        CREATE TRIGGER trg_cdp_profiles_updated_at BEFORE UPDATE ON cdp_profiles
-        FOR EACH ROW EXECUTE FUNCTION update_timestamp();
+        CREATE TRIGGER trg_cdp_profiles_updated_at
+        BEFORE UPDATE ON cdp_profiles
+        FOR EACH ROW
+        EXECUTE FUNCTION update_timestamp();
     END IF;
 END $$;
 
--- Logic Guard: Ensure segment history is never deleted, only appended to.
+-- ------------------------------------------------------------
+-- Logic Guard: segment_snapshots must be append-only
+-- ------------------------------------------------------------
+-- Rationale:
+--   segment_snapshots represents historical truth.
+--   AI learning & audit rely on monotonic growth.
+--   Deletions or truncations indicate data corruption.
 CREATE OR REPLACE FUNCTION prevent_snapshot_removal()
 RETURNS TRIGGER AS $$
 BEGIN
-    IF jsonb_array_length(NEW.segment_snapshots) < jsonb_array_length(OLD.segment_snapshots) THEN
-        RAISE EXCEPTION 'Data Integrity Violation: segment_snapshots is append-only';
+    IF jsonb_array_length(NEW.segment_snapshots)
+       < jsonb_array_length(OLD.segment_snapshots) THEN
+        RAISE EXCEPTION
+            'Data Integrity Violation: segment_snapshots is append-only';
     END IF;
     RETURN NEW;
 END;
@@ -126,20 +289,75 @@ $$ LANGUAGE plpgsql;
 DO $$
 BEGIN
     IF NOT EXISTS (
-        SELECT 1 FROM pg_trigger WHERE tgname = 'trg_prevent_snapshot_removal' AND tgrelid = 'cdp_profiles'::regclass
+        SELECT 1
+        FROM pg_trigger
+        WHERE tgname = 'trg_prevent_snapshot_removal'
+          AND tgrelid = 'cdp_profiles'::regclass
     ) THEN
-        CREATE TRIGGER trg_prevent_snapshot_removal BEFORE UPDATE ON cdp_profiles
-        FOR EACH ROW EXECUTE FUNCTION prevent_snapshot_removal();
+        CREATE TRIGGER trg_prevent_snapshot_removal
+        BEFORE UPDATE ON cdp_profiles
+        FOR EACH ROW
+        EXECUTE FUNCTION prevent_snapshot_removal();
     END IF;
 END $$;
 
--- Indexes for performance
-CREATE INDEX IF NOT EXISTS idx_cdp_profiles_email ON cdp_profiles (tenant_id, email);
-CREATE INDEX IF NOT EXISTS idx_cdp_profiles_segments ON cdp_profiles USING GIN (segments jsonb_path_ops); -- Fast JSON query
-CREATE INDEX IF NOT EXISTS idx_cdp_profiles_raw ON cdp_profiles USING GIN (raw_attributes);
+-- ------------------------------------------------------------
+-- INDEXES (Aligned with current schema + Arango sync model)
+-- ------------------------------------------------------------
 
--- Security: Enable Row Level Security (RLS)
+-- Fast lookup by primary email within tenant
+CREATE INDEX IF NOT EXISTS idx_cdp_profiles_primary_email
+    ON cdp_profiles (tenant_id, primary_email);
+
+-- Fast lookup by identities (cross-system resolution)
+-- Example queries:
+--   identities @> '["email:nam@gmail.com"]'
+--   identities ? 'crm:12345'
+CREATE INDEX IF NOT EXISTS idx_cdp_profiles_identities
+    ON cdp_profiles
+    USING GIN (identities);
+
+-- Fast segment membership queries
+CREATE INDEX IF NOT EXISTS idx_cdp_profiles_segments
+    ON cdp_profiles
+    USING GIN (segments jsonb_path_ops);
+
+-- Optional: accelerate keyword / enrichment searches
+CREATE INDEX IF NOT EXISTS idx_cdp_profiles_content_keywords
+    ON cdp_profiles
+    USING GIN (content_keywords);
+
+-- Optional: portfolio-level filtering (JSON predicates)
+CREATE INDEX IF NOT EXISTS idx_cdp_profiles_portfolio
+    ON cdp_profiles
+    USING GIN (portfolio_snapshot);
+
+-- ------------------------------------------------------------
+-- SECURITY: Row Level Security (RLS)
+-- ------------------------------------------------------------
+-- Enforced by app.current_tenant_id session variable
 ALTER TABLE cdp_profiles ENABLE ROW LEVEL SECURITY;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_policies
+        WHERE policyname = 'cdp_profiles_tenant_rls'
+          AND tablename = 'cdp_profiles'
+    ) THEN
+        CREATE POLICY cdp_profiles_tenant_rls
+        ON cdp_profiles
+        USING (
+            tenant_id = current_setting('app.current_tenant_id', true)::uuid
+        )
+        WITH CHECK (
+            tenant_id = current_setting('app.current_tenant_id', true)::uuid
+        );
+    END IF;
+END $$;
+
+
 
 -- ============================================================
 -- 5. CAMPAIGN (STRATEGY)

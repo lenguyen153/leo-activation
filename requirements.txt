@@ -34,10 +34,10 @@ requests
 # Used for webhooks, third-party services, or legacy APIs
 
 pydantic 
-# Core dependency of FastAPI, data validation and settings management using Python type annotations
-
 pydantic-settings
-# pydantic-settings adds enhanced settings management capabilities
+pydantic[email]
+# Data validation and settings management
+# Email utilities for user notifications and alerts
 
 accelerate
 # Hugging Face utility for efficient model loading and inference
