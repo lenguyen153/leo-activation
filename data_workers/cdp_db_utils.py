@@ -50,3 +50,55 @@ def get_user_contact_from_cdp(db_connection: Any, segment_name: str) -> List[Dic
     except Exception as e:
         logger.error(f"[ArangoDB] Query failed: {e}")
         return []
+    
+def get_subscription_from_cdp(db_connection: Any, segment_name: str) -> List[Dict[str, Any]]:
+    """
+    Fetches profiles in a segment that have valid Web Push Subscriptions.
+    
+    Target Field: p.web_push_subscriptions (Array of Objects)
+    Returns: [{ '_key': '...', 'firstName': '...', 'subscriptions': [...] }, ...]
+    """
+    if not db_connection:
+        logger.error("[CDPUtils] Database connection is not available.")
+        return []
+
+    try:
+        # 1. Resolve Segment Name to ID
+        # (Identical logic to get_user_contact_from_cdp)
+        segment_query = "FOR s IN cdp_segment FILTER s.name == @segment_name RETURN s._key"
+        cursor_seg = db_connection.aql.execute(segment_query, bind_vars={'segment_name': segment_name})
+        found_ids = [s for s in cursor_seg]
+
+        if not found_ids:
+            logger.warning(f"[ArangoDB] Segment '{segment_name}' not found.")
+            return []
+        
+        target_segment_id = found_ids[0]
+        logger.info(f"[ArangoDB] Resolving Web Push subscribers for Segment ID: {target_segment_id}")
+
+        # 2. Fetch Profile Data
+        # We filter for profiles that actually have subscriptions to avoid processing empty users.
+        profile_query = """
+        FOR p IN cdp_profile
+            FILTER @segment_id IN p.inSegments[*].id
+            FILTER LENGTH(
+                FOR i IN p.identities[*] 
+                FILTER LIKE(i, 'fcm_tokens:%') 
+                RETURN i
+            ) > 0
+            RETURN {
+                "_key": p._key,
+                "firstName": p.firstName,
+                "identities": p.identities
+            }
+        """
+        
+        cursor_prof = db_connection.aql.execute(profile_query, bind_vars={'segment_id': target_segment_id})
+        recipients = [r for r in cursor_prof]
+        
+        logger.info(f"[ArangoDB] Found {len(recipients)} subscribers in segment '{segment_name}'.")
+        return recipients
+
+    except Exception as e:
+        logger.error(f"[ArangoDB] Subscription Query failed: {e}")
+        return []

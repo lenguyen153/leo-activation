@@ -78,3 +78,7 @@ celery[redis]
 redis
 # In-memory data store
 # Used for caching, rate limiting, Celery broker, and ephemeral state
+
+firebase-admin
+# Web Push notifications library
+# Used for sending push notifications to web clients
