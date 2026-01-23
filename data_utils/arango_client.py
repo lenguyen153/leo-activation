@@ -27,3 +27,4 @@ def get_arango_db(settings: DatabaseSettings):
         )
 
     return db
+
