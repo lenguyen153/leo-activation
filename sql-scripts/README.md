@@ -1,294 +1,446 @@
+# LEO Activation – Database Technical Documentation
 
-# LEO Activation – Database Schema Documentation
-
-**AI-Driven Marketing Activation Platform**
+**System:** LEO Activation (AI-Driven Marketing & Notification Platform)
 **Database:** PostgreSQL 15+ / 16
-**Scope:** Core Activation – Strategy → Decision → Execution
-**Status:** Production-ready
+**Architecture:** Event-Driven · Agent-Oriented · Deterministic
+**Scope:** Strategy → Decision → Execution → Learning
+**Status:** Production-ready (Core, Governance, Experimentation)
 
 ---
 
-## 1. Mục tiêu của schema này
+## 0. Executive Summary
 
-Schema này **không phải** chỉ để “gửi email / push”.
+LEO Activation is **not** a campaign tool and **not** a message sender.
 
-Nó được thiết kế để:
+It is a **decision system** designed to repeatedly and provably answer one question:
 
-* Kích hoạt marketing **theo sự kiện (event-driven)**
-* Có **Agent (AI / Rule)** ra quyết định
-* Ghi nhận **ai – vì sao – gửi gì – cho ai – kết quả ra sao**
-* Đảm bảo:
+> *Given the current state of a customer and the business,
+> what is the correct action to take — and can we explain and audit that decision later?*
 
-  * Deterministic (cùng input → cùng output)
-  * Observable (trace được toàn bộ flow)
-  * Auditable (audit, attribution, compliance)
+The database schema enforces this at the **structural level**, not by convention.
 
-> Nếu không trace được → không phải Activation system.
+The system guarantees:
+
+* **Correctness** – actions follow explicit rules and data
+* **Explainability** – every action has a recorded reason
+* **Auditability** – every decision and message is traceable
+* **Reproducibility** – same inputs always yield the same outcomes
+
+If any of these are missing, the system is **not** activation.
 
 ---
 
-## 2. Nguyên tắc thiết kế cốt lõi
+## 1. Entity Count & Coverage
 
-### 2.1 Multi-tenancy tuyệt đối
+**Total tables: 19**
 
-* Mọi bảng đều có `tenant_id`
-* **Row Level Security (RLS)** bật ở DB level
-* Không tin application layer một mình
+| Domain                | Tables                                                       |
+| --------------------- | ------------------------------------------------------------ |
+| Core Tenancy          | `tenant`                                                     |
+| Profile & Identity    | `cdp_profiles`                                               |
+| Consent & Governance  | `consent_management`                                         |
+| Strategy & Definition | `campaign`, `marketing_event`                                |
+| Template System       | `message_templates`                                          |
+| Decision Layer        | `agent_task`                                                 |
+| Execution Truth       | `delivery_log`                                               |
+| Segmentation          | `segment_snapshot`, `segment_snapshot_member`                |
+| Experimentation       | `activation_experiments`                                     |
+| Attribution           | `activation_outcomes`                                        |
+| Behavioral Truth      | `behavioral_events`                                          |
+| Data Lineage          | `data_sources`                                               |
+| Alert & Intelligence  | `instruments`, `market_snapshot`, `alert_rules`, `news_feed` |
+| Infrastructure        | `embedding_job`                                              |
+
+This is the **minimum complete set** for a real activation system.
+Fewer tables → missing capability.
+More tables → unnecessary coupling.
+
+---
+
+## 2. Core Design Principles
+
+### 2.1 Absolute Multi-Tenancy
+
+* Every tenant-scoped table contains `tenant_id`
+* Row Level Security (RLS) is enforced at the database layer
+* Application logic is **not trusted** to enforce isolation
+
+Session context:
 
 ```sql
 SET app.current_tenant_id = '<tenant-uuid>';
 ```
 
-Không set → query trả về **0 row**.
+If unset → queries return **0 rows** (fail-closed).
 
 ---
 
-### 2.2 Tách rõ 4 lớp
+### 2.2 Root vs Tenant-Scoped Tables
 
-| Lớp             | Bảng              |
-| --------------- | ----------------- |
-| Strategy        | `campaign`        |
-| Definition      | `marketing_event` |
-| Decision        | `agent_task`      |
-| Execution Truth | `delivery_log`    |
+Not all tables are equal.
 
-Segment là **dữ liệu động**, nên phải snapshot.
+* **Root system table:** `tenant`
+* **Tenant-scoped tables:** everything else
+
+The `tenant` table **must not depend on tenant context** for writes.
+All other tables **must**.
+
+This avoids circular dependencies and bootstrap deadlocks.
 
 ---
 
-## 3. Tổng quan data model
+### 2.3 Append Truth, Never Rewrite History
+
+* Decisions are logged, not overwritten
+* Deliveries are immutable
+* Behavioral events are append-only
+* Corrections are new facts, not edits
+
+History is preserved by design.
+
+---
+
+### 2.4 Four-Layer Activation Model
+
+| Layer           | Responsibility         | Tables                                 |
+| --------------- | ---------------------- | -------------------------------------- |
+| Strategy        | Business intent        | `campaign`                             |
+| Definition      | What *can* be done     | `marketing_event`, `message_templates` |
+| Decision        | Why it was chosen      | `agent_task`                           |
+| Execution Truth | What actually happened | `delivery_log`                         |
+
+This separation is mandatory.
+
+---
+
+## 3. Core Entities
+
+### 3.1 `tenant` – System Root
+
+**Purpose**
+
+* Legal, billing, and isolation boundary
+* Integration anchor for Keycloak SSO
+
+**Characteristics**
+
+* Root table
+* Partially exempt from tenant-based RLS
+* No user data
+* No authentication logic
+
+Tenant creation is **admin-controlled**, not user-driven.
+
+---
+
+### 3.2 `cdp_profiles` – Unified Customer Snapshot
+
+**Purpose**
+
+* Canonical representation of a customer
+* Not a “user” table
+
+**Contains**
+
+* Identities and contact points
+* Segment membership
+* Behavioral aggregates
+* Vector embeddings for AI reasoning
+
+Profiles are **re-evaluated**, not mutated.
+
+---
+
+### 3.3 `consent_management` – Legal Enforcement
+
+**Purpose**
+
+* Enforce communication rights per profile × channel
+
+**Key rules**
+
+* Checked **before** any activation
+* Overrides campaigns, agents, and business logic
+
+If consent is missing, the system **must not act**.
+
+---
+
+## 4. Strategy & Activation Definition
+
+### 4.1 `campaign` – Business Intent
+
+Represents **why** activation exists.
+
+* High-level objective
+* No templates
+* No execution logic
+* No delivery records
+
+Examples:
+
+* Retention of churn-risk users
+* Upsell premium features
+
+---
+
+### 4.2 `marketing_event` – Action Definition
+
+Represents **what may happen**.
+
+Defines:
+
+* Channel
+* Timing
+* Associated template
+* Embedding for AI understanding
+
+One campaign → many events.
+
+---
+
+### 4.3 `message_templates` – Message Intent
+
+**Purpose**
+
+* Canonical, reusable message definitions
+
+**Supports**
+
+* Email
+* Zalo OA
+* Web Push
+* App Push
+* WhatsApp
+* Telegram
+* Future channels without schema change
+
+**Characteristics**
+
+* Versioned
+* Language-aware
+* Channel-agnostic
+* Metadata-driven for provider quirks
+
+Templates define **possibility**, not execution.
+
+---
+
+## 5. Decision Layer (Intelligence)
+
+### 5.1 `agent_task`
+
+**Purpose**
+
+* Record **why** a specific action was chosen
+
+Stores:
+
+* Reasoning summary
+* Reasoning trace
+* Inputs considered
+* Outcome selected
+
+If this table does not exist, the system is **not intelligent**, only automated.
+
+---
+
+## 6. Execution Truth
+
+### 6.1 `delivery_log`
+
+**Purpose**
+
+* Single source of truth for outbound actions
+
+Records:
+
+* Who was contacted
+* Through which channel
+* Rendered subject and body
+* Provider response
+* Timestamp
+
+If it is not in `delivery_log`, **it did not happen**.
+
+---
+
+## 7. Segmentation & Reproducibility
+
+### 7.1 `segment_snapshot`
+
+### 7.2 `segment_snapshot_member`
+
+**Purpose**
+
+* Freeze segment membership at decision time
+
+Required for:
+
+* Deterministic replay
+* AI audit
+* Attribution correctness
+
+Live segments without snapshots are **not allowed** in activation.
+
+---
+
+## 8. Experimentation & Learning
+
+### 8.1 `activation_experiments`
+
+**Purpose**
+
+* Measure effectiveness of activation decisions
+
+Supports:
+
+* A/B testing
+* Multi-variant tests
+* Bandit learning
+
+Tracks:
+
+* Exposure counts
+* Conversion counts
+
+No measurement → no learning → no intelligence.
+
+---
+
+## 9. Attribution (Why Outcomes Exist)
+
+### 9.1 `activation_outcomes`
+
+**Purpose**
+
+* Explicitly link a **delivery** to an **outcome**
+
+Answers:
+
+> *Did this specific message cause this specific result?*
+
+Why this is separate from `behavioral_events`:
+
+* Behavioral events = raw facts
+* Outcomes = interpreted attribution
+
+Attribution logic evolves; raw behavior does not.
+
+---
+
+## 10. Behavioral & External Intelligence
+
+### 10.1 `behavioral_events`
+
+* Append-only
+* Time-partitioned
+* High volume
+* User-centric
+
+Feeds:
+
+* Segmentation
+* Agent reasoning
+* Outcome attribution
+
+---
+
+### 10.2 Alert & Market Intelligence
+
+| Table             | Purpose          |
+| ----------------- | ---------------- |
+| `instruments`     | Tracked entities |
+| `market_snapshot` | Current state    |
+| `alert_rules`     | Trigger logic    |
+| `news_feed`       | External context |
+
+These tables enable **context-aware activation**, not blind messaging.
+
+---
+
+## 11. Data Lineage & Observability
+
+### 11.1 `data_sources`
+
+Tracks:
+
+* Where data originates
+* Sync frequency
+* Ingestion health
+
+If data origin is unknown, AI decisions are **not trustworthy**.
+
+---
+
+## 12. Security & RLS Model (Summary)
+
+* RLS enforced on all tenant-scoped tables
+* Session variable `app.current_tenant_id` is mandatory
+* `tenant` table:
+
+  * RLS enabled
+  * SELECT restricted
+  * INSERT / UPDATE allowed for bootstrap/admin paths
+
+Security is enforced by **structure**, not discipline.
+
+---
+
+## 13. Canonical Activation Flow
 
 ```
-tenant
- ├── cdp_profiles
- │    └── segment_snapshots (denormalized)
- │
- ├── campaign
- │    └── marketing_event
- │         ├── agent_task
- │         └── delivery_log
- │
- └── segment_snapshot
-      └── segment_snapshot_member
+[ Behavioral Events ]
+          ↓
+[ CDP Profiles (Re-evaluated) ]
+          ↓
+[ Segment Snapshot ]
+          ↓
+[ Agent Task (Decision + Reasoning) ]
+          ↓
+[ Marketing Event + Message Templates ]
+          ↓
+[ Delivery Log ]
+          ↓
+[ Activation Outcomes ]
+          ↓
+[ Activation Experiments ]
+
 ```
 
----
-
-## 4. Giải thích chi tiết từng bảng
-
----
-
-### 4.1 `tenant`
-
-**Ý nghĩa:** ranh giới bảo mật cao nhất (company / workspace)
-
-| Field       | Mô tả                 |
-| ----------- | --------------------- |
-| tenant_id   | UUID định danh tenant |
-| tenant_name | Tên tenant            |
-| status      | active / disabled     |
-| created_at  | Thời điểm tạo         |
-| updated_at  | Thời điểm update      |
+Every arrow is traceable.
+Every decision is explainable.
 
 ---
 
-### 4.2 `cdp_profiles`
+## 14. What This Schema Explicitly Does NOT Allow
 
-**Ý nghĩa:** hồ sơ khách hàng hợp nhất (CDP)
+This schema is designed to stop common failures by design.
 
-| Field             | Mô tả                               |
-| ----------------- | ----------------------------------- |
-| profile_id        | ID nội bộ                           |
-| ext_id            | ID từ CRM / ERP                     |
-| email             | Email (citext)                      |
-| mobile_number     | SĐT                                 |
-| segments          | Segment **hiện tại** (dynamic)      |
-| data_labels       | Nhãn phân loại                      |
-| segment_snapshots | Danh sách snapshot ID đã từng thuộc |
-| raw_attributes    | Dữ liệu linh hoạt                   |
+It does **not allow**:
 
-⚠️ `segment_snapshots`:
+* Campaigns that send messages directly without a decision step
+* Messages generated at send time without being persisted
+* Messaging providers acting as the source of truth
+* AI decisions that cannot be replayed or explained
+* Sending first and thinking about results later
 
-* **Denormalized**
-* **Append-only**
-* Chỉ dùng để lookup nhanh
-* Source of truth là `segment_snapshot_member`
+> **LEO Activation treats every message as a decision that must be owned.**
+
+That ownership is enforced **inside the database**, where it cannot be bypassed by application code.
 
 ---
 
-### 4.3 `campaign`
+## 15. Final Architectural Statement
 
-**Ý nghĩa:** chiến lược marketing (WHY)
+LEO Activation is a system that **takes responsibility for its actions**.
 
-| Field             | Mô tả                       |
-| ----------------- | --------------------------- |
-| campaign_id       | ID campaign                 |
-| campaign_code     | Code business               |
-| campaign_name     | Tên chiến dịch              |
-| objective         | Mục tiêu                    |
-| status            | active / paused / completed |
-| start_at / end_at | Thời gian hiệu lực          |
+This schema ensures that responsibility is:
 
-👉 Campaign **không gửi gì cả**.
-Nó chỉ định nghĩa **ý đồ**.
+* Explicit
+* Enforced
+* Auditable
+* Durable
+* Scalable 
 
----
-
-### 4.4 `marketing_event`
-
-**Ý nghĩa:** đơn vị thực thi (WHAT)
-
-Ví dụ:
-
-* Email blast
-* Webinar
-* Push notification
-* Zalo OA message
-
-| Field             | Mô tả                        |
-| ----------------- | ---------------------------- |
-| event_id          | Deterministic hash           |
-| campaign_id       | Campaign cha                 |
-| event_name        | Tên event                    |
-| event_type        | email / webinar / push       |
-| event_channel     | channel cụ thể               |
-| start_at / end_at | Thời gian                    |
-| embedding         | Vector cho AI                |
-| status            | planned / active / cancelled |
-
-Đặc điểm:
-
-* Partition theo `tenant_id`
-* `event_id` sinh **deterministic** (idempotent)
-
----
-
-### 4.5 `segment_snapshot`
-
-**Ý nghĩa:** snapshot **bất biến** của audience tại thời điểm kích hoạt
-
-| Field           | Mô tả           |
-| --------------- | --------------- |
-| snapshot_id     | ID snapshot     |
-| segment_name    | Tên segment     |
-| segment_version | Hash / version  |
-| snapshot_reason | Vì sao snapshot |
-| created_at      | Thời điểm tạo   |
-
-📌 Snapshot **không chứa profile_id**.
-
----
-
-### 4.6 `segment_snapshot_member`
-
-**Ý nghĩa:** mapping snapshot → profile (scale-safe)
-
-| Field       | Mô tả                  |
-| ----------- | ---------------------- |
-| snapshot_id | Snapshot               |
-| profile_id  | Profile thuộc snapshot |
-| created_at  | Thời điểm ghi nhận     |
-
-✔ Thiết kế này:
-
-* Chịu được 100K–1M profiles
-* Không dùng array / JSON to
-* Audit & attribution chuẩn
-
----
-
-### 4.7 `agent_task`
-
-**Ý nghĩa:** dấu vết quyết định của Agent (AI / Rule)
-
-| Field             | Mô tả                        |
-| ----------------- | ---------------------------- |
-| task_id           | ID task                      |
-| agent_name        | Tên agent                    |
-| task_type         | plan / execute / evaluate    |
-| campaign_id       | Context                      |
-| event_id          | Context                      |
-| snapshot_id       | Audience snapshot            |
-| reasoning_summary | Lý do (text)                 |
-| reasoning_trace   | Chi tiết (JSON)              |
-| status            | pending / completed / failed |
-
-📌 Đây là **flight recorder** cho AI.
-
-Không có bảng này → AI = black box.
-
----
-
-### 4.8 `delivery_log`
-
-**Ý nghĩa:** sự thật duy nhất về việc gửi (EXECUTION TRUTH)
-
-| Field             | Mô tả                     |
-| ----------------- | ------------------------- |
-| delivery_id       | ID                        |
-| event_id          | Event                     |
-| profile_id        | Người nhận                |
-| snapshot_id       | Snapshot lúc gửi          |
-| channel           | email / zalo / push       |
-| destination       | Email / phone             |
-| delivery_status   | sent / delivered / failed |
-| provider_response | Response từ provider      |
-| sent_at           | Thời điểm gửi             |
-
-📌 **delivery_log không bao giờ bị rewrite**.
-Sai → ghi row mới.
-
----
-
-## 5. Vì sao schema này đúng cho LEO Activation
-
-* Không “segment drift”
-* Không mất lịch sử
-* Không AI mù mờ
-* Không attribution giả
-* Không cross-tenant leak
-
-Nó buộc hệ thống phải **trung thực với thời gian**.
-
----
-
-## 6. Nguyên tắc vàng
-
-> Campaign nói **vì sao**
-> Event nói **gửi cái gì**
-> Snapshot nói **gửi cho ai lúc đó**
-> Agent nói **ai quyết định**
-> Delivery log nói **thực sự đã xảy ra gì**
-
-Nếu một hệ Activation không trả lời được đủ 5 câu trên → **không đáng tin**.
-
----
-
-## 7. Phạm vi KHÔNG xử lý ở schema này
-
-* Authentication / User
-* UI / Dashboard
-* Channel provider config
-* Raw clickstream
-
-Schema này là **xương sống**, không phải toàn bộ cơ thể.
-
----
-
-### Kết luận
-
-Đây là schema dành cho:
-
-* hệ activation **có AI**
-* hệ cần audit
-* hệ cần scale
-* hệ không chấp nhận “gửi nhầm là xong”
-
-Nếu bạn cần:
-
-* migration guide
-* sample queries
-* attribution SQL
-* load test checklist
-
-→ nói tiếp, chúng ta đang ở đúng tầng kiến trúc.
+Anything less is not activation — it is automation without accountability.

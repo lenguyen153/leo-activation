@@ -18,7 +18,7 @@ TARGET_DB="leo_activation_db"
 HOST_PORT=5435
 
 # --- SQL schema config ---
-SCHEMA_VERSION=260121
+SCHEMA_VERSION=260125
 SCHEMA_DESCRIPTION="upgrade marketing_event + AI embedding pipeline"
 SQL_FILE_PATH="./sql-scripts/schema.sql"
 
@@ -209,10 +209,15 @@ TABLES=(
 
   # --- CDP ---
   cdp_profiles
+  consent_management
 
   # --- Campaign & Marketing ---
   campaign
   marketing_event
+  message_templates
+  activation_experiments
+
+  # --- Segmentation ---
   segment_snapshot
   segment_snapshot_member
 
@@ -228,13 +233,16 @@ TABLES=(
 
   # --- Execution / Delivery ---
   delivery_log
+  activation_outcomes
 
   # --- Behavioral Feedback Loop ---
   behavioral_events
 
-  # --- System ---
+  # --- Data Lineage / System ---
+  data_sources
   schema_migrations
 )
+
 # Note: ag_catalog tables (ag_graph, ag_label) exist but are hidden in ag_catalog schema
 
 echo "🔍 Verifying all tables in $TARGET_DB..."

@@ -37,28 +37,81 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- =========================
--- 3. TENANT (CORE NAMESPACE)
+-- 3. TENANT (CORE NAMESPACE, KEYCLOAK-INTEGRATED)
 -- =========================
 -- The root of the multi-tenant architecture. 
 -- Tenant ID remains UUID to ensure global uniqueness across distributed systems.
+
+-- =========================
+-- TENANT (KEYCLOAK-INTEGRATED)
+-- =========================
 CREATE TABLE IF NOT EXISTS tenant (
-    tenant_id   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_name TEXT NOT NULL,
-    status      TEXT DEFAULT 'active', -- 'active', 'suspended', 'archived'
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    tenant_id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+    tenant_name         TEXT NOT NULL,
+    status              TEXT NOT NULL DEFAULT 'active', -- active, suspended, archived
+
+    -- Keycloak integration
+    keycloak_realm      TEXT NOT NULL,        -- e.g. leo-prod, leo-staging
+    keycloak_client_id  TEXT NOT NULL,        -- e.g. leo-activation
+    keycloak_org_id     TEXT,                 -- optional: Keycloak Organization / Group ID
+
+    -- Metadata
+    metadata            JSONB NOT NULL DEFAULT '{}',
+
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    CONSTRAINT uq_tenant_keycloak_realm
+        UNIQUE (keycloak_realm, tenant_name)
 );
 
+-- Enable RLS
+ALTER TABLE tenant ENABLE ROW LEVEL SECURITY;
+
+-- Allow SELECT only for current tenant
+CREATE POLICY tenant_select_policy
+ON tenant
+FOR SELECT
+USING (
+    tenant_id = current_setting('app.current_tenant_id', true)::uuid
+);
+
+-- Allow INSERT / UPDATE WITHOUT tenant_id check
+-- Tenant is a root entity and must be bootstrapable
+CREATE POLICY tenant_insert_policy
+ON tenant
+FOR INSERT
+WITH CHECK (true);
+
+CREATE POLICY tenant_update_policy
+ON tenant
+FOR UPDATE
+WITH CHECK (true);
+
+
+
+-- =========================
 -- Trigger: Maintain updated_at
+-- =========================
 DO $$
 BEGIN
     IF NOT EXISTS (
-        SELECT 1 FROM pg_trigger WHERE tgname = 'trg_tenant_updated_at' AND tgrelid = 'tenant'::regclass
+        SELECT 1
+        FROM pg_trigger
+        WHERE tgname = 'trg_tenant_updated_at'
+          AND tgrelid = 'tenant'::regclass
     ) THEN
-        CREATE TRIGGER trg_tenant_updated_at BEFORE UPDATE ON tenant
-        FOR EACH ROW EXECUTE FUNCTION update_timestamp();
+        CREATE TRIGGER trg_tenant_updated_at
+        BEFORE UPDATE ON tenant
+        FOR EACH ROW
+        EXECUTE FUNCTION update_timestamp();
     END IF;
 END $$;
+
+-- Example (application side):
+-- SET app.current_tenant_id = '<tenant-uuid>';
+
 
 
 -- ============================================================
@@ -671,41 +724,9 @@ CREATE TABLE IF NOT EXISTS embedding_job (
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- ============================================================
--- 14. SYSTEM BOOTSTRAP: DEFAULT TENANT
--- ============================================================
-
--- 1. Safely insert default 'master' tenant
--- Uses SELECT ... WHERE NOT EXISTS for concurrency-safe idempotency
-INSERT INTO tenant (tenant_name, status)
-SELECT 'master', 'active'
-WHERE NOT EXISTS (
-    SELECT 1 FROM tenant WHERE tenant_name = 'master'
-);
-
--- 2. Set the Session Context
--- We set 'app.current_tenant_id' so that RLS policies on other tables 
--- (like alert_rules) will allow inserts immediately after this block.
-DO $$
-DECLARE
-    v_tenant_id UUID;
-BEGIN
-    -- Fetch the ID of the master
-    SELECT tenant_id INTO v_tenant_id 
-    FROM tenant 
-    WHERE tenant_name = 'master';
-
-    -- Set the config variable. 
-    -- Parameter 3 (is_local) is FALSE, meaning this applies to the whole session,
-    -- not just this transaction block.
-    PERFORM set_config('app.current_tenant_id', v_tenant_id::text, false);
-    
-    -- Optional: Log to console for verification
-    RAISE NOTICE 'Session configured for Tenant: master (%)', v_tenant_id;
-END $$;
 
 -- ============================================================
--- 15. BEHAVIORAL EVENTS (THE FEEDBACK LOOP)
+-- 14. BEHAVIORAL EVENTS (THE FEEDBACK LOOP)
 -- ============================================================
 -- Captures high-frequency user actions for AI training & triggering.
 -- Partitioned by time (Monthly) because this table grows huge.
@@ -763,3 +784,262 @@ ALTER TABLE behavioral_events ENABLE ROW LEVEL SECURITY;
 CREATE POLICY behavioral_events_tenant_rls ON behavioral_events
     USING (tenant_id = current_setting('app.current_tenant_id', true)::uuid)
     WITH CHECK (tenant_id = current_setting('app.current_tenant_id', true)::uuid);
+
+
+-- ============================================================
+-- 15.  CONSENT MANAGEMENT (LEGAL COMPLIANCE)
+-- ============================================================
+-- Tracks user consents for various channels and purposes.
+-- Supports GDPR / PDPA audits
+-- ============================================================
+CREATE TABLE IF NOT EXISTS consent_management (
+    consent_id      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+    tenant_id       UUID NOT NULL
+        REFERENCES tenant(tenant_id) ON DELETE CASCADE,
+
+    profile_id      TEXT NOT NULL
+        REFERENCES cdp_profiles(profile_id) ON DELETE CASCADE,
+
+    channel         TEXT NOT NULL,           -- email, sms, web, push, whatsapp
+    is_allowed      BOOLEAN NOT NULL DEFAULT FALSE,
+
+    source          TEXT,                    -- CMP, API, form, import
+    legal_basis     TEXT,                    -- gdpr_consent, legitimate_interest
+
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    CONSTRAINT uq_consent_profile_channel
+        UNIQUE (tenant_id, profile_id, channel)
+);
+
+-- Indexes
+CREATE INDEX IF NOT EXISTS idx_consent_tenant_profile
+    ON consent_management (tenant_id, profile_id);
+
+CREATE INDEX IF NOT EXISTS idx_consent_channel_allowed
+    ON consent_management (channel, is_allowed);
+
+-- Trigger
+CREATE TRIGGER trg_consent_updated
+BEFORE UPDATE ON consent_management
+FOR EACH ROW EXECUTE FUNCTION update_timestamp();
+
+
+-- =========================
+-- 16. DATA SOURCES (INTEGRATIONS)
+-- =========================
+-- Tracks external data sources integrated into the CDP.
+-- =========================
+CREATE TABLE IF NOT EXISTS data_sources (
+    source_id       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+    tenant_id       UUID NOT NULL
+        REFERENCES tenant(tenant_id) ON DELETE CASCADE,
+
+    source_name     TEXT NOT NULL,
+    source_type     TEXT NOT NULL,        -- s3, postgresql, arango, api, webhook
+
+    connection_ref  TEXT,                 -- secret ref / connection id
+    sync_frequency  INTERVAL,             -- e.g. '1 hour', '1 day'
+    last_synced_at  TIMESTAMPTZ,
+
+    is_active       BOOLEAN NOT NULL DEFAULT TRUE,
+
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    CONSTRAINT uq_tenant_source_name
+        UNIQUE (tenant_id, source_name)
+);
+
+-- Indexes
+CREATE INDEX IF NOT EXISTS idx_data_sources_tenant
+    ON data_sources (tenant_id);
+
+CREATE INDEX IF NOT EXISTS idx_data_sources_active
+    ON data_sources (is_active);
+
+-- Trigger
+CREATE TRIGGER trg_data_sources_updated
+BEFORE UPDATE ON data_sources
+FOR EACH ROW EXECUTE FUNCTION update_timestamp();
+
+
+-- =========================
+-- 17. ACTIVATION EXPERIMENTS (A/B TESTING)
+-- =========================
+-- Tracks A/B experiments for marketing campaigns.
+-- =========================
+CREATE TABLE IF NOT EXISTS activation_experiments (
+    experiment_id      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+    tenant_id          UUID NOT NULL
+        REFERENCES tenant(tenant_id) ON DELETE CASCADE,
+
+    campaign_id        TEXT NOT NULL,
+    variant_name       TEXT NOT NULL,        -- A, B, control, treatment_1
+
+    exposure_count     INT NOT NULL DEFAULT 0,
+    conversion_count   INT NOT NULL DEFAULT 0,
+
+    metric_name        TEXT,                 -- click, purchase, signup
+    started_at         TIMESTAMPTZ,
+    ended_at           TIMESTAMPTZ,
+
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    CONSTRAINT uq_experiment_variant
+        UNIQUE (tenant_id, campaign_id, variant_name)
+);
+
+-- Indexes
+CREATE INDEX IF NOT EXISTS idx_experiments_campaign
+    ON activation_experiments (tenant_id, campaign_id);
+
+CREATE INDEX IF NOT EXISTS idx_experiments_variant
+    ON activation_experiments (variant_name);
+
+-- Trigger
+CREATE TRIGGER trg_activation_experiments_updated
+BEFORE UPDATE ON activation_experiments
+FOR EACH ROW EXECUTE FUNCTION update_timestamp();
+
+-- =========================
+-- 18. MESSAGE TEMPLATES (MULTI-CHANNEL)
+-- =========================
+-- Stores reusable message templates for activation across channels
+-- such as Email, Zalo OA, Web Push, App Push, WhatsApp, Telegram.
+-- Templates are definitions only (intent level), not execution truth.
+-- =========================
+CREATE TABLE IF NOT EXISTS message_templates (
+    template_id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+    tenant_id           UUID NOT NULL
+        REFERENCES tenant(tenant_id) ON DELETE CASCADE,
+
+    channel             TEXT NOT NULL,   -- email, zalo_oa, web_push, app_push, whatsapp, telegram
+    template_name       TEXT NOT NULL,
+
+    subject_template    TEXT,            -- used for email / notification title
+    body_template       TEXT NOT NULL,    -- main message body (HTML / Markdown / text)
+
+    template_engine     TEXT NOT NULL DEFAULT 'jinja2',  -- jinja2, handlebars, liquid
+    language_code       TEXT DEFAULT 'vi',               -- vi, en, th, id, etc.
+
+    metadata            JSONB NOT NULL DEFAULT '{}',     -- buttons, deep_links, images, CTA, provider hints
+
+    status              TEXT NOT NULL DEFAULT 'draft',   -- draft, approved, archived
+    version             INT NOT NULL DEFAULT 1,
+
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    CONSTRAINT uq_template_name_version
+        UNIQUE (tenant_id, channel, template_name, version)
+);
+
+-- Indexes
+CREATE INDEX IF NOT EXISTS idx_message_templates_tenant
+    ON message_templates (tenant_id);
+
+CREATE INDEX IF NOT EXISTS idx_message_templates_channel
+    ON message_templates (channel);
+
+CREATE INDEX IF NOT EXISTS idx_message_templates_status
+    ON message_templates (status);
+
+-- Trigger
+CREATE TRIGGER trg_message_templates_updated
+BEFORE UPDATE ON message_templates
+FOR EACH ROW EXECUTE FUNCTION update_timestamp();
+
+-- =========================
+-- 19. ACTIVATION OUTCOMES (ATTRIBUTION TRUTH)
+-- =========================
+-- Links a specific delivery to a concrete user outcome.
+-- This table is append-only and represents attribution truth.
+-- e.g: This activation of delivery (email / push / message) is credited with this outcome.
+-- =========================
+CREATE TABLE IF NOT EXISTS activation_outcomes (
+    outcome_id        BIGSERIAL PRIMARY KEY,
+
+    tenant_id         UUID NOT NULL
+        REFERENCES tenant(tenant_id) ON DELETE CASCADE,
+
+    delivery_id       BIGINT NOT NULL
+        REFERENCES delivery_log(delivery_id) ON DELETE CASCADE,
+
+    profile_id        TEXT NOT NULL
+        REFERENCES cdp_profiles(profile_id) ON DELETE CASCADE,
+
+    outcome_type      TEXT NOT NULL,    -- click, open, purchase, signup
+    outcome_value     NUMERIC,           -- revenue, score, duration, etc.
+
+    occurred_at       TIMESTAMPTZ NOT NULL,
+
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Indexes
+CREATE INDEX IF NOT EXISTS idx_outcomes_tenant_delivery
+    ON activation_outcomes (tenant_id, delivery_id);
+
+CREATE INDEX IF NOT EXISTS idx_outcomes_profile_time
+    ON activation_outcomes (profile_id, occurred_at);
+
+
+-- ============================================================
+-- 20. SYSTEM BOOTSTRAP: Safely bootstrap 'master' tenant
+-- ============================================================
+
+-- RLS-safe: temporarily disable RLS for bootstrap
+ALTER TABLE tenant DISABLE ROW LEVEL SECURITY;
+
+INSERT INTO tenant (
+    tenant_name,
+    status,
+    keycloak_realm,
+    keycloak_client_id
+)
+VALUES (
+    'master',
+    'active',
+    'leo-master',
+    'leo-activation'
+)
+ON CONFLICT (keycloak_realm, tenant_name) DO NOTHING;
+
+-- Re-enable RLS immediately
+ALTER TABLE tenant ENABLE ROW LEVEL SECURITY;
+
+-- =========================
+-- 2. Set session tenant context
+-- =========================
+DO $$
+DECLARE
+    v_tenant_id UUID;
+BEGIN
+    -- Fetch exactly one tenant ID (deterministic)
+    SELECT tenant_id
+    INTO STRICT v_tenant_id
+    FROM tenant
+    WHERE tenant_name = 'master'
+      AND keycloak_realm = 'leo-master';
+
+    -- Set session-scoped tenant context (required for RLS)
+    PERFORM set_config(
+        'app.current_tenant_id',
+        v_tenant_id::text,
+        false
+    );
+
+    RAISE NOTICE 'Session configured for tenant=master, tenant_id=%', v_tenant_id;
+END $$;
+
+
+-- =========================
+-- END OF SCHEMA.SQL
+-- =========================
