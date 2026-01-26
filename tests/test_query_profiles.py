@@ -1,4 +1,4 @@
-from data_models.dbo_tenant import resolve_and_set_default_tenant
+from data_models.dbo_tenant import get_default_tenant_id
 from data_workers.pg_profile_repository import PGProfileRepository
 from data_utils.settings import DatabaseSettings
 from data_utils.pg_client import get_pg_connection
@@ -135,19 +135,17 @@ def main(argv: Optional[list[str]] = None) -> None:
 
     try:
         # --- Infrastructure wiring ---
-        settings = DatabaseSettings()
-        pg_conn = get_pg_connection(settings)
+        pg_conn = DatabaseSettings().get_pg_connection()
 
         # --- Tenant context ---
         # If not provided via CLI, resolve default from DB
         if cli_tenant_id:
             tenant_id = cli_tenant_id
         else:
-            tenant_id = resolve_and_set_default_tenant(pg_conn)
+            tenant_id = get_default_tenant_id()
 
         if not tenant_id:
-            logger.error(
-                "Could not resolve Tenant ID. Please provide one or check your 'tenant' table.")
+            logger.error( "Could not resolve Tenant ID. Please provide one or check your 'tenant' table.")
             sys.exit(1)
 
         # --- Repository ---

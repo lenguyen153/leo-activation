@@ -53,5 +53,5 @@ class ArangoProfileRepository:
                     doc.get("_key"),
                 )
 
-        logger.info("[ArangoDB] Loaded %d profiles", len(profiles))
+        logger.info("[ArangoDB] Loaded %d profiles for segment %s at start_index %d", len(profiles), segment_id, start_index)
         return profiles

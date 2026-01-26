@@ -10,25 +10,23 @@ from __future__ import annotations
 
 import logging
 import uuid
-from typing import Final
+from typing import Any, Final
 
 import psycopg
-from psycopg.rows import dict_row
-from sqlalchemy import String, UniqueConstraint, text
+from sqlalchemy import String, UniqueConstraint, select, text
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, Session, mapped_column
+
+from data_utils.settings import DatabaseSettings
+
 
 from .base import Base, TimestampMixin
 
 # ---------------------------------------------------------------------
-# Logging
+# Logging & Constants
 # ---------------------------------------------------------------------
 
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------
 
 DEFAULT_TENANT_NAME: Final[str] = "master"
 TENANT_STATUS_ACTIVE: Final[str] = "active"
@@ -37,11 +35,9 @@ TENANT_STATUS_ACTIVE: Final[str] = "active"
 # ORM Model
 # ---------------------------------------------------------------------
 
-
 class Tenant(Base, TimestampMixin):
     """
     Tenant represents an isolated logical customer boundary.
-
     Used in combination with PostgreSQL RLS via `app.current_tenant_id`.
     """
 
@@ -55,6 +51,7 @@ class Tenant(Base, TimestampMixin):
     tenant_name: Mapped[str] = mapped_column(
         String,
         nullable=False,
+        index=True,
         server_default=text(f"'{DEFAULT_TENANT_NAME}'"),
     )
 
@@ -68,26 +65,15 @@ class Tenant(Base, TimestampMixin):
     # Keycloak integration
     # --------------------------------------------------
 
-    keycloak_realm: Mapped[str] = mapped_column(
-        String,
-        nullable=False,
-    )
-
-    keycloak_client_id: Mapped[str] = mapped_column(
-        String,
-        nullable=False,
-    )
-
-    keycloak_org_id: Mapped[str | None] = mapped_column(
-        String,
-        nullable=True,
-    )
+    keycloak_realm: Mapped[str] = mapped_column(String, nullable=False)
+    keycloak_client_id: Mapped[str] = mapped_column(String, nullable=False)
+    keycloak_org_id: Mapped[str | None] = mapped_column(String, nullable=True)
 
     # --------------------------------------------------
     # Extensible metadata
     # --------------------------------------------------
 
-    metadata_: Mapped[dict] = mapped_column(
+    metadata_: Mapped[dict[str, Any]] = mapped_column(
         "metadata",
         JSONB,
         nullable=False,
@@ -104,9 +90,7 @@ class Tenant(Base, TimestampMixin):
 
     def __repr__(self) -> str:
         return (
-            f"<Tenant tenant_id={self.tenant_id} "
-            f"tenant_name='{self.tenant_name}' "
-            f"status='{self.status}'>"
+            f"<Tenant(id={self.tenant_id}, name='{self.tenant_name}', status='{self.status}')>"
         )
 
 
@@ -114,67 +98,64 @@ class Tenant(Base, TimestampMixin):
 # Tenant Context Resolver (PostgreSQL RLS)
 # ---------------------------------------------------------------------
 
-
-def resolve_and_set_default_tenant(
-    conn: psycopg.Connection,
-    tenant_name: str = DEFAULT_TENANT_NAME,
-) -> uuid.UUID:
+def get_default_tenant_id(pg_connection: psycopg.Connection = None) -> uuid.UUID:
     """
-    Resolve tenant_id by tenant_name and bind it to the current
-    PostgreSQL session using `set_config`.
-
-    This is required for Row-Level Security (RLS) enforcement.
-
-    Parameters
-    ----------
-    conn : psycopg.Connection
-        Active psycopg v3 connection
-    tenant_name : str
-        Logical tenant name
-
-    Returns
-    -------
-    uuid.UUID
-        Resolved tenant_id
-
-    Raises
-    ------
-    RuntimeError
-        If tenant does not exist
+    Utility to get the default tenant ID from the database.
     """
+    if pg_connection is None:
+        # Lazy init connection if not provided
+        pg_connection = DatabaseSettings().get_pg_connection()
+    
+    with pg_connection.cursor() as cursor:
+        cursor.execute(
+            "SELECT tenant_id FROM tenant WHERE tenant_name = %s",
+            (DEFAULT_TENANT_NAME,),
+        )
+        result = cursor.fetchone()
+        if not result:
+            raise RuntimeError(f"Default tenant '{DEFAULT_TENANT_NAME}' not found in database.")
+        
+        return result[0]
 
-    sql_resolve = """
-        SELECT tenant_id
-        FROM tenant
-        WHERE tenant_name = %s
-        LIMIT 1
+def resolve_tenant_id(session: Session, tenant_name: str = DEFAULT_TENANT_NAME) -> uuid.UUID:
     """
-
-    sql_set_context = """
-        SELECT set_config('app.current_tenant_id', %s, true)
+    Look up a tenant_id by name within an existing SQL session.
     """
+    stmt = select(Tenant.tenant_id).where(Tenant.tenant_name == tenant_name)
+    tenant_id = session.scalar(stmt)
 
-    with conn.cursor(row_factory=dict_row) as cur:
-        cur.execute(sql_resolve, (tenant_name,))
-        row = cur.fetchone()
+    if not tenant_id:
+        raise RuntimeError(f"Tenant '{tenant_name}' not found in database.")
+    
+    return tenant_id
 
-        if row is None:
-            raise RuntimeError(
-                f"Tenant '{tenant_name}' not found; "
-                "cannot establish RLS context"
-            )
 
-        tenant_id: uuid.UUID = row["tenant_id"]
-
-        # Bind tenant to session for RLS
-        cur.execute(sql_set_context, (str(tenant_id),))
-
-    conn.commit()
-
-    logger.info(
-        "PostgreSQL session bound to tenant '%s' (%s)",
-        tenant_name,
-        tenant_id,
+def set_tenant_context(session: Session, tenant_id: uuid.UUID) -> None:
+    """
+    Binds the tenant_id to the current PostgreSQL transaction.
+    
+    The 'true' parameter in set_config makes the setting local to the 
+    current transaction, preventing leaks in connection pools.
+    """
+    session.execute(
+        text("SELECT set_config('app.current_tenant_id', :tid, true)"),
+        {"tid": str(tenant_id)},
     )
+    logger.debug("RLS context set for tenant_id: %s", tenant_id)
 
+
+def prepare_tenant_session(session: Session, tenant_name: str = DEFAULT_TENANT_NAME) -> uuid.UUID:
+    """
+    High-level utility to resolve a tenant and bind the session in one go.
+    
+    Usage:
+        with get_db_context(settings) as session:
+            prepare_tenant_session(session, "my_customer")
+            # All subsequent queries in this session follow RLS rules
+            data = session.execute(...) 
+    """
+    tenant_id = resolve_tenant_id(session, tenant_name)
+    set_tenant_context(session, tenant_id)
+    
+    logger.info("Session bound to tenant '%s' (%s)", tenant_name, tenant_id)
     return tenant_id

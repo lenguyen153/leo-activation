@@ -60,13 +60,14 @@ class ArangoToPostgresSyncService:
 
                 start = self.arango_repo.batch_size + start
                 print(f"Synced profiles at start: {start}")
-                cdp_profiles = self.arango_repo.fetch_profiles_by_segment(segment_id=segment_id, segment_name=segment_name, start_index=start)
+                cdp_profiles = self.arango_repo.fetch_profiles_by_segment(
+                    segment_id=segment_id, segment_name=segment_name, start_index=start)
                 size = len(cdp_profiles)
 
         return total_synched_profile
 
     def to_pg_profile(self, segment_id, segment_name, p):
- 
+
         pg_profile = PGProfileUpsert(
             tenant_id=self.tenant_id,
             profile_id=p.profile_id or "",

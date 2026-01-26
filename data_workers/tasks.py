@@ -6,9 +6,7 @@ from typing import Optional
 import redis
 from celery import shared_task
 
-from data_models.dbo_tenant import resolve_and_set_default_tenant
-from data_utils.pg_client import get_pg_connection
-from data_utils.settings import DatabaseSettings
+from data_models.dbo_tenant import resolve_tenant_id
 from data_workers.sync_segment_profiles import run_synch_profiles
 from main_configs import CELERY_REDIS_URL
 
@@ -55,8 +53,7 @@ def sync_profiles_task(
     """
 
     if not tenant_id:
-        pg_conn = get_pg_connection(DatabaseSettings())
-        tenant_id = resolve_and_set_default_tenant(pg_conn)
+        tenant_id = get_default_tenant_id()
 
     # --------------------------------------------------
     # Validation (fail fast, fail loud)
