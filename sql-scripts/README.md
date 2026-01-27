@@ -1,294 +1,266 @@
-
-# LEO Activation – Database Schema Documentation
-
-**AI-Driven Marketing Activation Platform**
-**Database:** PostgreSQL 15+ / 16
-**Scope:** Core Activation – Strategy → Decision → Execution
-**Status:** Production-ready
+Here is the fully updated, comprehensive **Database Technical Reference Manual** for the LEO Data Activation & Alert Center. This document serves as the single source of truth for the database schema, architectural patterns, and data flows.
 
 ---
 
-## 1. Mục tiêu của schema này
+# LEO Data Activation & Alert Center – Database Technical Reference
 
-Schema này **không phải** chỉ để “gửi email / push”.
-
-Nó được thiết kế để:
-
-* Kích hoạt marketing **theo sự kiện (event-driven)**
-* Có **Agent (AI / Rule)** ra quyết định
-* Ghi nhận **ai – vì sao – gửi gì – cho ai – kết quả ra sao**
-* Đảm bảo:
-
-  * Deterministic (cùng input → cùng output)
-  * Observable (trace được toàn bộ flow)
-  * Auditable (audit, attribution, compliance)
-
-> Nếu không trace được → không phải Activation system.
+**Version:** 2.0 (Unified Schema)
+**Database Engine:** PostgreSQL 16+
+**Architecture:** Multi-tenant, Event-Driven, Hybrid (SQL + Vector + Graph)
+**Primary Context:** High-frequency decisioning, AI Agent reasoning, and Financial Alerting.
 
 ---
 
-## 2. Nguyên tắc thiết kế cốt lõi
+## 1. System Architecture Overview
 
-### 2.1 Multi-tenancy tuyệt đối
+The database is designed not just for storage, but as an active participant in the decision loop. It enforces strict separation of concerns across four layers:
 
-* Mọi bảng đều có `tenant_id`
-* **Row Level Security (RLS)** bật ở DB level
-* Không tin application layer một mình
+1. **Strategy Layer:** Where business intent is defined (`campaign`, `alert_rules`).
+2. **Identity Layer:** The unified view of the customer (`cdp_profiles`).
+3. **Intelligence Layer:** Where AI and logic live (`agent_task`, `news_feed`, `market_snapshot`).
+4. **Execution Layer:** The immutable record of what happened (`delivery_log`, `behavioral_events`).
 
-```sql
-SET app.current_tenant_id = '<tenant-uuid>';
-```
+### 1.1 Key Technical Patterns
 
-Không set → query trả về **0 row**.
-
----
-
-### 2.2 Tách rõ 4 lớp
-
-| Lớp             | Bảng              |
-| --------------- | ----------------- |
-| Strategy        | `campaign`        |
-| Definition      | `marketing_event` |
-| Decision        | `agent_task`      |
-| Execution Truth | `delivery_log`    |
-
-Segment là **dữ liệu động**, nên phải snapshot.
+* **Absolute Multi-Tenancy:** Isolation is enforced at the row level via RLS policies.
+* **Vector Native:** Embeddings are first-class citizens for RAG (Retrieval-Augmented Generation).
+* **Deterministic IDs:** Critical logic uses content-hashing (SHA256) for IDs to ensure idempotency.
+* **Append-Only Truth:** Historical data (snapshots, logs, behavior) is never overwritten.
 
 ---
 
-## 3. Tổng quan data model
+## 2. Infrastructure & Setup
 
-```
-tenant
- ├── cdp_profiles
- │    └── segment_snapshots (denormalized)
- │
- ├── campaign
- │    └── marketing_event
- │         ├── agent_task
- │         └── delivery_log
- │
- └── segment_snapshot
-      └── segment_snapshot_member
-```
+### 2.1 Required Extensions
 
----
+The system relies on specific PostgreSQL extensions to function.
 
-## 4. Giải thích chi tiết từng bảng
+| Extension | Purpose |
+| --- | --- |
+| **`pgcrypto`** | Generates `UUIDv4` and handles SHA256 hashing for deterministic IDs. |
+| **`vector`** | Enables high-dimensional vector storage (1536 dim) for Semantic Search. |
+| **`citext`** | "Case-Insensitive Text" for robust email and username comparisons. |
+| **`age`** | Apache AGE for Graph Database capabilities (Nodes/Edges within Postgres). |
+| **`postgis`** | Spatial data support for geo-targeting. |
 
----
+### 2.2 Global Utilities
 
-### 4.1 `tenant`
-
-**Ý nghĩa:** ranh giới bảo mật cao nhất (company / workspace)
-
-| Field       | Mô tả                 |
-| ----------- | --------------------- |
-| tenant_id   | UUID định danh tenant |
-| tenant_name | Tên tenant            |
-| status      | active / disabled     |
-| created_at  | Thời điểm tạo         |
-| updated_at  | Thời điểm update      |
+* **`update_timestamp()`**: Trigger function applied to all mutable tables to auto-update the `updated_at` column.
+* **`app.current_tenant_id`**: Session variable required for all queries. If unset, RLS hides all data.
 
 ---
 
-### 4.2 `cdp_profiles`
+## 3. Schema Reference: Core & Identity
 
-**Ý nghĩa:** hồ sơ khách hàng hợp nhất (CDP)
+### 3.1 `tenant` (Root Entity)
 
-| Field             | Mô tả                               |
-| ----------------- | ----------------------------------- |
-| profile_id        | ID nội bộ                           |
-| ext_id            | ID từ CRM / ERP                     |
-| email             | Email (citext)                      |
-| mobile_number     | SĐT                                 |
-| segments          | Segment **hiện tại** (dynamic)      |
-| data_labels       | Nhãn phân loại                      |
-| segment_snapshots | Danh sách snapshot ID đã từng thuộc |
-| raw_attributes    | Dữ liệu linh hoạt                   |
+The root of the multi-tenant architecture. Integrates directly with Keycloak.
 
-⚠️ `segment_snapshots`:
+| Field | Type | Description |
+| --- | --- | --- |
+| `tenant_id` | `UUID` (PK) | Global unique identifier. |
+| `tenant_name` | `TEXT` | Human-readable name (unique per realm). |
+| `keycloak_realm` | `TEXT` | The Keycloak Realm this tenant belongs to. |
+| `keycloak_client_id` | `TEXT` | The OIDC Client ID. |
+| `metadata` | `JSONB` | Custom config (branding, limits). |
+| `status` | `TEXT` | `active`, `suspended`, `archived`. |
 
-* **Denormalized**
-* **Append-only**
-* Chỉ dùng để lookup nhanh
-* Source of truth là `segment_snapshot_member`
+### 3.2 `cdp_profiles` (The "User")
 
----
+The unified customer profile. Synced from upstream sources (e.g., ArangoDB) but enriched locally with AI vectors and snapshots.
 
-### 4.3 `campaign`
+* **Constraint:** `segment_snapshots` is **append-only** (enforced by `prevent_snapshot_removal` trigger).
 
-**Ý nghĩa:** chiến lược marketing (WHY)
-
-| Field             | Mô tả                       |
-| ----------------- | --------------------------- |
-| campaign_id       | ID campaign                 |
-| campaign_code     | Code business               |
-| campaign_name     | Tên chiến dịch              |
-| objective         | Mục tiêu                    |
-| status            | active / paused / completed |
-| start_at / end_at | Thời gian hiệu lực          |
-
-👉 Campaign **không gửi gì cả**.
-Nó chỉ định nghĩa **ý đồ**.
+| Field | Type | Description |
+| --- | --- | --- |
+| `tenant_id` | `UUID` | Partition Key. |
+| `profile_id` | `TEXT` (PK) | The Source ID (e.g., `U_NAM_INVESTOR`). |
+| `identities` | `JSONB` | List of all known IDs (e.g., `["email:a@b.com", "crm:123"]`). |
+| `primary_email` | `CITEXT` | Normalized email for lookups. |
+| `living_location` | `TEXT` | Location string (e.g., "Vietnam"). |
+| `job_titles` | `JSONB` | Array of titles (e.g., `["Investor", "Founder"]`). |
+| `segments` | `JSONB` | Current segment membership. |
+| `segment_snapshots` | `JSONB` | **Audit Trail:** Historical segment membership over time. |
+| `portfolio_snapshot` | `JSONB` | Current asset holdings (Cash, Positions). |
+| `portfolio_risk_score` | `NUMERIC` | 0.00 - 1.00 AI-evaluated risk tolerance. |
+| `interest_embedding` | `VECTOR(1536)` | **AI Memory:** Semantic summary of user interests. |
 
 ---
 
-### 4.4 `marketing_event`
+## 4. Schema Reference: Strategy & Definition
 
-**Ý nghĩa:** đơn vị thực thi (WHAT)
+### 4.1 `campaign`
 
-Ví dụ:
+High-level business initiatives.
 
-* Email blast
-* Webinar
-* Push notification
-* Zalo OA message
+| Field | Type | Description |
+| --- | --- | --- |
+| `campaign_id` | `TEXT` (PK) | Internal ID. |
+| `campaign_code` | `TEXT` | Human-readable ref (e.g., `SUMMER-2026`). Unique per tenant. |
+| `objective` | `TEXT` | `AWARENESS`, `CONVERSION`, etc. |
+| `status` | `TEXT` | `active`, `draft`, `paused`. |
 
-| Field             | Mô tả                        |
-| ----------------- | ---------------------------- |
-| event_id          | Deterministic hash           |
-| campaign_id       | Campaign cha                 |
-| event_name        | Tên event                    |
-| event_type        | email / webinar / push       |
-| event_channel     | channel cụ thể               |
-| start_at / end_at | Thời gian                    |
-| embedding         | Vector cho AI                |
-| status            | planned / active / cancelled |
+### 4.2 `marketing_event`
 
-Đặc điểm:
+Specific tactical actions within a campaign.
 
-* Partition theo `tenant_id`
-* `event_id` sinh **deterministic** (idempotent)
+* **Partitioning:** Hash-Partitioned by `tenant_id` (16 partitions) for scale.
 
----
+| Field | Type | Description |
+| --- | --- | --- |
+| `event_id` | `TEXT` (PK) | Unique event identifier. |
+| `event_type` | `TEXT` | `BROADCAST`, `TRIGGER`, `API`. |
+| `event_channel` | `TEXT` | `EMAIL`, `SMS`, `PUSH`. |
+| `embedding` | `VECTOR(1536)` | **AI Context:** Semantic vector of the event description. |
 
-### 4.5 `segment_snapshot`
+### 4.3 `message_templates`
 
-**Ý nghĩa:** snapshot **bất biến** của audience tại thời điểm kích hoạt
+Multi-channel content definitions. Templates are blueprints, not final messages.
 
-| Field           | Mô tả           |
-| --------------- | --------------- |
-| snapshot_id     | ID snapshot     |
-| segment_name    | Tên segment     |
-| segment_version | Hash / version  |
-| snapshot_reason | Vì sao snapshot |
-| created_at      | Thời điểm tạo   |
-
-📌 Snapshot **không chứa profile_id**.
+| Field | Type | Description |
+| --- | --- | --- |
+| `template_id` | `UUID` (PK) | Unique ID. |
+| `channel` | `TEXT` | `email`, `zalo_oa`, `web_push`, `whatsapp`. |
+| `body_template` | `TEXT` | The raw content (Jinja2/Liquid/Handlebars). |
+| `template_engine` | `TEXT` | Default `jinja2`. |
+| `version` | `INT` | Version control for templates. |
 
 ---
 
-### 4.6 `segment_snapshot_member`
+## 5. Schema Reference: Alert Center (Financial)
 
-**Ý nghĩa:** mapping snapshot → profile (scale-safe)
+### 5.1 `instruments`
 
-| Field       | Mô tả                  |
-| ----------- | ---------------------- |
-| snapshot_id | Snapshot               |
-| profile_id  | Profile thuộc snapshot |
-| created_at  | Thời điểm ghi nhận     |
+Reference data for tradable assets.
 
-✔ Thiết kế này:
+| Field | Type | Description |
+| --- | --- | --- |
+| `symbol` | `VARCHAR` | Ticker symbol (e.g., `AAPL`, `BTC-USD`). |
+| `type` | `VARCHAR` | `STOCK`, `CRYPTO`, `FX`. |
+| `tenant_id` | `UUID` | If NULL, it is a global asset. If set, it's private. |
 
-* Chịu được 100K–1M profiles
-* Không dùng array / JSON to
-* Audit & attribution chuẩn
+### 5.2 `market_snapshot`
 
----
+Real-time pricing data. High-throughput table.
 
-### 4.7 `agent_task`
+| Field | Type | Description |
+| --- | --- | --- |
+| `symbol` | `VARCHAR` (PK) | The asset ticker. |
+| `price` | `NUMERIC` | Current market price. |
+| `change_percent` | `NUMERIC` | 24h change %. |
 
-**Ý nghĩa:** dấu vết quyết định của Agent (AI / Rule)
+### 5.3 `alert_rules`
 
-| Field             | Mô tả                        |
-| ----------------- | ---------------------------- |
-| task_id           | ID task                      |
-| agent_name        | Tên agent                    |
-| task_type         | plan / execute / evaluate    |
-| campaign_id       | Context                      |
-| event_id          | Context                      |
-| snapshot_id       | Audience snapshot            |
-| reasoning_summary | Lý do (text)                 |
-| reasoning_trace   | Chi tiết (JSON)              |
-| status            | pending / completed / failed |
+User-defined or AI-generated monitoring rules.
 
-📌 Đây là **flight recorder** cho AI.
+* **Identity Generation:** `rule_id` is a SHA256 hash of (Tenant + User + Symbol + Logic). This ensures **Idempotency** (preventing duplicate alerts).
 
-Không có bảng này → AI = black box.
+| Field | Type | Description |
+| --- | --- | --- |
+| `rule_id` | `VARCHAR` (PK) | **Hash:** Deterministic ID. |
+| `profile_id` | `TEXT` | The user who owns this alert. |
+| `symbol` | `VARCHAR` | Target asset. |
+| `condition_logic` | `JSONB` | e.g., `{"operator": ">", "value": 150}`. |
+| `source` | `ENUM` | `USER_MANUAL` or `AI_AGENT`. |
 
----
+### 5.4 `news_feed`
 
-### 4.8 `delivery_log`
+Market news ingestion with AI enrichment.
 
-**Ý nghĩa:** sự thật duy nhất về việc gửi (EXECUTION TRUTH)
-
-| Field             | Mô tả                     |
-| ----------------- | ------------------------- |
-| delivery_id       | ID                        |
-| event_id          | Event                     |
-| profile_id        | Người nhận                |
-| snapshot_id       | Snapshot lúc gửi          |
-| channel           | email / zalo / push       |
-| destination       | Email / phone             |
-| delivery_status   | sent / delivered / failed |
-| provider_response | Response từ provider      |
-| sent_at           | Thời điểm gửi             |
-
-📌 **delivery_log không bao giờ bị rewrite**.
-Sai → ghi row mới.
+| Field | Type | Description |
+| --- | --- | --- |
+| `news_id` | `BIGSERIAL` | Primary Key. |
+| `content_embedding` | `VECTOR(1536)` | **Hybrid Search:** Used for semantic news retrieval. |
+| `sentiment_score` | `NUMERIC` | AI-extracted sentiment (0.00 to 1.00). |
+| `related_symbols` | `VARCHAR[]` | Assets mentioned in the news. |
 
 ---
 
-## 5. Vì sao schema này đúng cho LEO Activation
+## 6. Schema Reference: Intelligence & Execution
 
-* Không “segment drift”
-* Không mất lịch sử
-* Không AI mù mờ
-* Không attribution giả
-* Không cross-tenant leak
+### 6.1 `agent_task` (The "Brain")
 
-Nó buộc hệ thống phải **trung thực với thời gian**.
+Stores the AI's decision-making process ("Chain of Thought").
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `task_id` | `TEXT` (PK) | Unique Task ID. |
+| `reasoning_trace` | `JSONB` | **CoT:** The step-by-step logic the AI used. |
+| `reasoning_summary` | `TEXT` | Final summary of why an action was taken. |
+| `related_news_id` | `BIGINT` | Link to the news item that triggered this task. |
+
+### 6.2 `delivery_log` (The "Hand")
+
+The authoritative record of sent messages.
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `delivery_id` | `BIGSERIAL` | Primary Key. |
+| `event_id` | `TEXT` | Link to Marketing Event. |
+| `profile_id` | `TEXT` | Recipient. |
+| `delivery_status` | `TEXT` | `sent`, `delivered`, `failed`. |
+| `provider_response` | `JSONB` | Raw payload from the provider (e.g., SendGrid/Twilio). |
+
+### 6.3 `behavioral_events` (The "Ear")
+
+Captures user reactions.
+
+* **Partitioning:** Range-Partitioned by **Time** (Monthly).
+* **Purpose:** Feedback loop for AI training.
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `event_type` | `TEXT` | `VIEW`, `CLICK`, `CONVERT`. |
+| `entity_type` | `TEXT` | `NEWS`, `ALERT`, `CAMPAIGN`. |
+| `sentiment_val` | `INT` | +1 (Positive), -1 (Negative), 0 (Neutral). |
 
 ---
 
-## 6. Nguyên tắc vàng
+## 7. Data Flows
 
-> Campaign nói **vì sao**
-> Event nói **gửi cái gì**
-> Snapshot nói **gửi cho ai lúc đó**
-> Agent nói **ai quyết định**
-> Delivery log nói **thực sự đã xảy ra gì**
+### 7.1 The Alert Triggering Flow
 
-Nếu một hệ Activation không trả lời được đủ 5 câu trên → **không đáng tin**.
+1. **Ingest:** `market_snapshot` updates via external feed.
+2. **Match:** Worker polls `alert_rules` where `status='ACTIVE'` and matches symbol/condition.
+3. **Trace:** `agent_task` is created to validate the alert relevance (optional AI check).
+4. **Execute:** If valid, `delivery_log` is written (Notification sent).
+5. **Record:** Alert status may update to `TRIGGERED`.
 
----
+### 7.2 The AI Enrichment Flow
 
-## 7. Phạm vi KHÔNG xử lý ở schema này
-
-* Authentication / User
-* UI / Dashboard
-* Channel provider config
-* Raw clickstream
-
-Schema này là **xương sống**, không phải toàn bộ cơ thể.
+1. **New Profile:** User inserted into `cdp_profiles`.
+2. **Async Job:** `embedding_job` created for the user.
+3. **Process:** Worker reads `job_titles`, `interests`, `behavioral_events`.
+4. **Vectorize:** Generates 1536-dim vector.
+5. **Update:** Writes to `cdp_profiles.interest_embedding`.
 
 ---
 
-### Kết luận
+## 8. Security & Compliance Model
 
-Đây là schema dành cho:
+### 8.1 Row Level Security (RLS)
 
-* hệ activation **có AI**
-* hệ cần audit
-* hệ cần scale
-* hệ không chấp nhận “gửi nhầm là xong”
+* **Policy:** `tenant_select_policy`
+* **Mechanism:** `USING (tenant_id = current_setting('app.current_tenant_id', true)::uuid)`
+* **Effect:** A user/service can strictly ONLY see rows matching the session's tenant ID.
 
-Nếu bạn cần:
+### 8.2 Consent Management (`consent_management`)
 
-* migration guide
-* sample queries
-* attribution SQL
-* load test checklist
+* **Granularity:** Per `profile_id` + `channel`.
+* **Legal Basis:** Stores strict `legal_basis` (GDPR) and `source` of consent.
+* **Enforcement:** Execution services must join against this table before inserting into `delivery_log`.
 
-→ nói tiếp, chúng ta đang ở đúng tầng kiến trúc.
+---
+
+## 9. Performance Features
+
+### 9.1 Partitioning Strategy
+
+* **Marketing Events:** Hash Partitioned (Modulus 16). optimized for uniform distribution of massive campaign definitions.
+* **Behavioral Events:** Time Partitioned (Monthly). Optimized for dropping old data (data retention) and query locality (hot recent data).
+
+### 9.2 Indexes
+
+* **Vector:** HNSW Index on `news_feed` and `cdp_profiles` for fast cosine similarity.
+* **JSONB:** GIN Indexes on `cdp_profiles.identities` and `segments` for fast attribute lookup.
+* **Graph:** AGE Catalog enabled for graph traversals.

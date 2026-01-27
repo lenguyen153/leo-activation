@@ -92,7 +92,10 @@ HUGGINGFACE_TOKEN: str = os.getenv("HUGGINGFACE_TOKEN")
 # Default Redis Configuration for caching and state management
 REDIS_URL: Optional[str] = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 CELERY_REDIS_URL: Optional[str] = os.getenv("CELERY_REDIS_URL", "redis://localhost:6379/1")
+CELERY_SYNC_PROFILES_CRON: Optional[str] = os.getenv("CELERY_SYNC_PROFILES_CRON", "*/5 * * * *")
 
+# Data Sync API Key for authenticating with LeoCDP
+DATA_SYNC_API_KEY: Optional[str] = os.getenv("DATA_SYNC_API_KEY")
 
 # ============================================================
 # Marketing / Messaging Integrations Configuration

@@ -210,12 +210,15 @@ FB_PAGE_ID=
 
 # Optional helpers
 HUGGINGFACE_TOKEN=
-LEO_CDP_API_URL=
+
+# API Key for LeoCDP Data Sync
+DATA_SYNC_API_KEY=your_leocdp_api_key_here
 
 # Database configuration
 
 # PostgreSQL (Target)
 PGSQL_DB_HOST=localhost
+PGSQL_DB_PORT=5432
 PGSQL_DB_NAME=leo_cdp
 PGSQL_DB_USER=postgres
 PGSQL_DB_PASSWORD=your_pg_password

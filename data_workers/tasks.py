@@ -6,6 +6,7 @@ from typing import Optional
 import redis
 from celery import shared_task
 
+from data_models.dbo_tenant import resolve_tenant_id
 from data_workers.sync_segment_profiles import run_synch_profiles
 from main_configs import CELERY_REDIS_URL
 
@@ -13,18 +14,17 @@ from main_configs import CELERY_REDIS_URL
 # Setup
 # --------------------------------------------------
 
+
+
 logger = logging.getLogger(__name__)
-
 redis_client = redis.from_url(CELERY_REDIS_URL)
-
-DEFAULT_TENANT_ID = os.getenv("DEFAULT_TENANT_ID", "default")
 
 
 def _build_last_sync_key(
     *,
-    tenant_id: str,
     segment_id: Optional[str] = None,
     segment_name: Optional[str] = None,
+    tenant_id: Optional[str] = None
 ) -> str:
     """
     Build a deterministic Redis key for incremental sync checkpoints.
@@ -52,7 +52,8 @@ def sync_profiles_task(
     - Exactly one must be provided
     """
 
-    tenant_id = tenant_id or DEFAULT_TENANT_ID
+    if not tenant_id:
+        tenant_id = get_default_tenant_id()
 
     # --------------------------------------------------
     # Validation (fail fast, fail loud)
@@ -75,9 +76,9 @@ def sync_profiles_task(
     # --------------------------------------------------
 
     last_sync_key = _build_last_sync_key(
-        tenant_id=tenant_id,
         segment_id=segment_id,
         segment_name=segment_name,
+        tenant_id=tenant_id
     )
 
     last_sync_ts = redis_client.get(last_sync_key)

@@ -15,8 +15,21 @@ from data_utils.arango_client import get_arango_db
 
 logger = logging.getLogger(__name__)
 
+
+def get_user_contact_from_cdp(segment_id: str) -> Optional[list]:
+    """
+    Placeholder function to fetch user contacts from CDP based on segment_id.
+    In real implementation, this should query the actual CDP system.
+    """
+    # For demonstration, return a static list
+    dummy_data = [
+        {"phone": "0912345678", "firstName": "Alice"},
+        {"phone": "0987654321", "firstName": "Bob"},
+        {"phone": "0123456789", "firstName": "Charlie"},
+    ]
+    return dummy_data
+
 class ZaloOAChannel(NotificationChannel):
-    
     
 
     # Constants for DB Lookup
@@ -49,16 +62,16 @@ class ZaloOAChannel(NotificationChannel):
             self._load_tokens_from_db()
 
 
-    def send(self, recipient_segment: str, message: str = None, **kwargs):
+    def send(self, segment_id: str, message: str = None, **kwargs):
         """
         Main Execution Flow (Test Mode)
         """
-        logger.info(f"[Zalo] Starting TEST MODE send to segment: {recipient_segment}")
+        logger.info(f"[Zalo] Starting TEST MODE send to segment: {segment_id}")
         
         # 1. Fetch Recipients
-        recipients = get_user_contact_from_cdp(self.db, recipient_segment)
+        recipients = get_user_contact_from_cdp(segment_id)
         if not recipients:
-            return {"status": "warning", "message": f"No profiles found in '{recipient_segment}'"}
+            return {"status": "warning", "message": f"No profiles found in '{segment_id}'"}
 
         stats = {"sent": 0, "failed": 0, "invalid_phone": 0}
 

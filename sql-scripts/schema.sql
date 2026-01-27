@@ -37,28 +37,81 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- =========================
--- 3. TENANT (CORE NAMESPACE)
+-- 3. TENANT (CORE NAMESPACE, KEYCLOAK-INTEGRATED)
 -- =========================
 -- The root of the multi-tenant architecture. 
 -- Tenant ID remains UUID to ensure global uniqueness across distributed systems.
+
+-- =========================
+-- TENANT (KEYCLOAK-INTEGRATED)
+-- =========================
 CREATE TABLE IF NOT EXISTS tenant (
-    tenant_id   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_name TEXT NOT NULL,
-    status      TEXT DEFAULT 'active', -- 'active', 'suspended', 'archived'
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    tenant_id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+    tenant_name         TEXT NOT NULL,
+    status              TEXT NOT NULL DEFAULT 'active', -- active, suspended, archived
+
+    -- Keycloak integration
+    keycloak_realm      TEXT NOT NULL,        -- e.g. leo-prod, leo-staging
+    keycloak_client_id  TEXT NOT NULL,        -- e.g. leo-activation
+    keycloak_org_id     TEXT,                 -- optional: Keycloak Organization / Group ID
+
+    -- Metadata
+    metadata            JSONB NOT NULL DEFAULT '{}',
+
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    CONSTRAINT uq_tenant_keycloak_realm
+        UNIQUE (keycloak_realm, tenant_name)
 );
 
+-- Enable RLS
+ALTER TABLE tenant ENABLE ROW LEVEL SECURITY;
+
+-- Allow SELECT only for current tenant
+CREATE POLICY tenant_select_policy
+ON tenant
+FOR SELECT
+USING (
+    tenant_id = current_setting('app.current_tenant_id', true)::uuid
+);
+
+-- Allow INSERT / UPDATE WITHOUT tenant_id check
+-- Tenant is a root entity and must be bootstrapable
+CREATE POLICY tenant_insert_policy
+ON tenant
+FOR INSERT
+WITH CHECK (true);
+
+CREATE POLICY tenant_update_policy
+ON tenant
+FOR UPDATE
+WITH CHECK (true);
+
+
+
+-- =========================
 -- Trigger: Maintain updated_at
+-- =========================
 DO $$
 BEGIN
     IF NOT EXISTS (
-        SELECT 1 FROM pg_trigger WHERE tgname = 'trg_tenant_updated_at' AND tgrelid = 'tenant'::regclass
+        SELECT 1
+        FROM pg_trigger
+        WHERE tgname = 'trg_tenant_updated_at'
+          AND tgrelid = 'tenant'::regclass
     ) THEN
-        CREATE TRIGGER trg_tenant_updated_at BEFORE UPDATE ON tenant
-        FOR EACH ROW EXECUTE FUNCTION update_timestamp();
+        CREATE TRIGGER trg_tenant_updated_at
+        BEFORE UPDATE ON tenant
+        FOR EACH ROW
+        EXECUTE FUNCTION update_timestamp();
     END IF;
 END $$;
+
+-- Example (application side):
+-- SET app.current_tenant_id = '<tenant-uuid>';
+
 
 
 -- ============================================================
@@ -671,41 +724,9 @@ CREATE TABLE IF NOT EXISTS embedding_job (
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- ============================================================
--- 14. SYSTEM BOOTSTRAP: DEFAULT TENANT
--- ============================================================
-
--- 1. Safely insert default 'master app' tenant
--- Uses SELECT ... WHERE NOT EXISTS for concurrency-safe idempotency
-INSERT INTO tenant (tenant_name, status)
-SELECT 'master app', 'active'
-WHERE NOT EXISTS (
-    SELECT 1 FROM tenant WHERE tenant_name = 'master app'
-);
-
--- 2. Set the Session Context
--- We set 'app.current_tenant_id' so that RLS policies on other tables 
--- (like alert_rules) will allow inserts immediately after this block.
-DO $$
-DECLARE
-    v_tenant_id UUID;
-BEGIN
-    -- Fetch the ID of the master app
-    SELECT tenant_id INTO v_tenant_id 
-    FROM tenant 
-    WHERE tenant_name = 'master app';
-
-    -- Set the config variable. 
-    -- Parameter 3 (is_local) is FALSE, meaning this applies to the whole session,
-    -- not just this transaction block.
-    PERFORM set_config('app.current_tenant_id', v_tenant_id::text, false);
-    
-    -- Optional: Log to console for verification
-    RAISE NOTICE 'Session configured for Tenant: master app (%)', v_tenant_id;
-END $$;
 
 -- ============================================================
--- 15. BEHAVIORAL EVENTS (THE FEEDBACK LOOP)
+-- 14. BEHAVIORAL EVENTS (THE FEEDBACK LOOP)
 -- ============================================================
 -- Captures high-frequency user actions for AI training & triggering.
 -- Partitioned by time (Monthly) because this table grows huge.

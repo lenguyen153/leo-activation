@@ -1,8 +1,16 @@
 from urllib.parse import quote_plus
+import psycopg
 from pydantic import Field
 from pydantic_settings import BaseSettings
+from psycopg.rows import dict_row
+from arango import ArangoClient
+
 
 class DatabaseSettings(BaseSettings):
+    """
+    Database connection settings for PostgreSQL and ArangoDB.
+    """
+    
     # -------------------------
     # PostgreSQL (Target)
     # -------------------------
@@ -50,4 +58,37 @@ class DatabaseSettings(BaseSettings):
             f"postgresql://{self.PGSQL_DB_USER}:{encoded_password}@"
             f"{self.PGSQL_DB_HOST}:{self.PGSQL_DB_PORT}/"
             f"{self.PGSQL_DB_NAME}?options=-c%20search_path%3Dag_catalog,public"
+        )
+
+    def get_arango_db(self):
+        """
+        Create and return an ArangoDB database connection.
+        """
+
+        client = ArangoClient(hosts=self.ARANGO_HOST)
+
+        db = client.db(
+            self.ARANGO_DB,
+            username=self.ARANGO_USER,
+            password=self.ARANGO_PASSWORD,
+        )
+
+        # Optional but useful sanity check
+        print(f"🔌 Connected to ArangoDB database: {db.name}")
+
+        if db.name != self.ARANGO_DB:
+            print(
+                f"⚠️ WARNING: Expected '{self.ARANGO_DB}', "
+                f"but connected to '{db.name}'"
+            )
+
+        return db
+        
+    def get_pg_connection(self) -> psycopg.Connection:
+        """
+        Create a PostgreSQL connection using Settings.
+        """
+        return psycopg.connect(
+            self.pg_dsn,
+            row_factory=dict_row,
         )
