@@ -4,10 +4,6 @@
 title: LEO Data Activation & Alert Center - Complete Schema (v2)
 ---
 erDiagram
-
-    %% ==========================================
-    %% 1. CORE TENANCY (Identity & Access)
-    %% ==========================================
     TENANT {
         UUID tenant_id PK
         text tenant_name
@@ -18,10 +14,6 @@ erDiagram
         jsonb metadata
         timestamptz created_at
     }
-
-    %% ==========================================
-    %% 2. CDP PROFILES (Customer Data Platform)
-    %% ==========================================
     CDP_PROFILES {
         text profile_id PK "ArangoDB _key"
         UUID tenant_id FK
@@ -44,10 +36,6 @@ erDiagram
         vector interest_embedding "1536 dim"
         timestamptz updated_at
     }
-
-    %% ==========================================
-    %% 3. CAMPAIGNS & STRATEGY
-    %% ==========================================
     CAMPAIGN {
         text campaign_id PK
         UUID tenant_id FK
@@ -81,10 +69,6 @@ erDiagram
         int conversion_count
         text metric_name
     }
-
-    %% ==========================================
-    %% 4. EXECUTION (Events & Delivery)
-    %% ==========================================
     MARKETING_EVENT {
         text event_id PK
         UUID tenant_id FK
@@ -119,10 +103,6 @@ erDiagram
         numeric outcome_value
         timestamptz occurred_at
     }
-
-    %% ==========================================
-    %% 5. SEGMENTATION (Static Lists)
-    %% ==========================================
     SEGMENT_SNAPSHOT {
         text snapshot_id PK
         UUID tenant_id FK
@@ -136,10 +116,6 @@ erDiagram
         text profile_id PK,FK
         UUID tenant_id FK
     }
-
-    %% ==========================================
-    %% 6. INTELLIGENCE (Agents, Alerts, News)
-    %% ==========================================
     AGENT_TASK {
         text task_id PK
         UUID tenant_id FK
@@ -190,10 +166,6 @@ erDiagram
         numeric change_percent
         timestamptz last_updated
     }
-
-    %% ==========================================
-    %% 7. DATA PIPELINE & COMPLIANCE
-    %% ==========================================
     EMBEDDING_JOB {
         bigserial job_id PK
         UUID tenant_id FK
@@ -233,39 +205,24 @@ erDiagram
         text connection_ref
         boolean is_active
     }
-
-    %% ==========================================
-    %% RELATIONSHIPS
-    %% ==========================================
-
-    %% Multi-tenancy Roots
     TENANT ||--o{ CDP_PROFILES : owns
     TENANT ||--o{ CAMPAIGN : owns
     TENANT ||--o{ MESSAGE_TEMPLATES : owns
     TENANT ||--o{ DATA_SOURCES : configures
     TENANT ||--o{ EMBEDDING_JOB : queues
-
-    %% Global vs Tenant Assets
     TENANT |o--o{ INSTRUMENTS : "manages (optional)"
-
-    %% Profile Centric
-    CDP_PROFILES ||--o{ SEGMENT_SNAPSHOT_MEMBER : "in snapshot"
+    CDP_PROFILES ||--o{ SEGMENT_SNAPSHOT_MEMBER : appears_in
+    SEGMENT_SNAPSHOT ||--o{ SEGMENT_SNAPSHOT_MEMBER : contains
     CDP_PROFILES ||--o{ BEHAVIORAL_EVENTS : generates
     CDP_PROFILES ||--o{ CONSENT_MANAGEMENT : grants
     CDP_PROFILES ||--o{ ALERT_RULES : sets
     CDP_PROFILES ||--o{ DELIVERY_LOG : receives
     CDP_PROFILES ||--o{ ACTIVATION_OUTCOMES : "performs action"
-
-    %% Campaign & Execution
     CAMPAIGN ||--o{ MARKETING_EVENT : defines
     CAMPAIGN ||--o{ ACTIVATION_EXPERIMENTS : tests
     CAMPAIGN ||--o{ AGENT_TASK : "analyzed by"
     MARKETING_EVENT ||--o{ DELIVERY_LOG : triggers
-    
-    %% Attribution Loop
     DELIVERY_LOG ||--o{ ACTIVATION_OUTCOMES : attributes
-
-    %% Market Data
     INSTRUMENTS ||--o{ MARKET_SNAPSHOT : "live data"
     INSTRUMENTS ||--o{ ALERT_RULES : "monitored by"
     NEWS_FEED ||--o{ AGENT_TASK : "context for"
