@@ -141,3 +141,24 @@ def get_users_by_ticker_interest(
     except Exception as e:
         print(f"❌ Error fetching interested users: {e}")
         return []
+    
+def get_ticker_scores_by_profile(conn: psycopg.Connection, profile_id: str) -> List[Dict[str, Any]]:
+    """
+    Fetches all affinity records for a specific profile_id.
+    Returns: [{'ticker': 'AAPL', 'raw_score': 500.0, 'interest_score': 0.83}, ...]
+    """
+    query = """
+        SELECT 
+            ticker, 
+            raw_score, 
+            interest_score
+        FROM user_ticker_affinity
+        WHERE profile_id = %s
+    """
+    try:
+        with conn.cursor() as cur:
+            cur.execute(query, (profile_id,))
+            return cur.fetchall()
+    except Exception as e:
+        print(f"❌ Error fetching user interests: {e}")
+        return []
