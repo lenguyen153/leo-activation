@@ -7,13 +7,12 @@ import psycopg
 import os
 
 from data_utils.arango_client import get_arango_db
-from data_utils.pg_client import get_pg_connection
 from data_utils.settings import DatabaseSettings
 
 logger = logging.getLogger("agentic_tools.data_enrichment")
 
 HALF_LIFE_DAYS = 7.0
-SCORE_THRESHOLD = 0.05 # Delete if score drops below this
+SCORE_THRESHOLD = 0.01 # Delete if score drops below this
 TARGET_SEGMENT = "Active in last 1 months"
 
 # CONSTANT: The "Half-Way" Point.
@@ -109,7 +108,7 @@ def run_batch_scoring_job(settings: DatabaseSettings, start_time: str, end_time:
         return
 
     # B. Process Upserts
-    conn = get_pg_connection(settings)
+    conn = settings.get_pg_connection()
     try:
         with conn.cursor() as cur:
             for entry in batch_data:
@@ -136,7 +135,7 @@ def run_batch_scoring_job(settings: DatabaseSettings, start_time: str, end_time:
                     # 2. Apply Time Decay to RAW Score
                     time_diff = last_event_time - prev_interaction
                     days_elapsed = max(time_diff.total_seconds() / 86400.0, 0)
-                    decay_factor = 0.5 ** (days_elapsed / settings.HALF_LIFE_DAYS)
+                    decay_factor = 0.5 ** (days_elapsed / HALF_LIFE_DAYS)
                     
                     decayed_raw = current_raw * decay_factor
                     
@@ -178,7 +177,7 @@ def init_affinity_table(settings: DatabaseSettings):
     """
     Creates the PostgreSQL table if it does not exist.
     """
-    conn = get_pg_connection(settings)
+    conn = settings.get_pg_connection()
     try:
         with conn.cursor() as cur:
             cur.execute("""
@@ -210,7 +209,7 @@ def run_garbage_collection(settings: DatabaseSettings):
     """
     Deletes rows where the calculated time-decayed score is below the threshold.
     """
-    conn = get_pg_connection(settings)
+    conn = settings.get_pg_connection()
     try:
         # Math: If CurrentScore < Threshold, Delete.
         # We calculate the decay directly in SQL to be efficient.
@@ -224,9 +223,12 @@ def run_garbage_collection(settings: DatabaseSettings):
         with conn.cursor() as cur:
             cur.execute(query, (SCORE_THRESHOLD,))
             deleted_count = cur.rowcount
+
+        conn.commit()
             
         logger.info(f"🧹 Garbage Collection: Removed {deleted_count} rows (Score < {SCORE_THRESHOLD}).")
     except Exception as e:
+        conn.rollback()
         logger.error(f"❌ Garbage collection failed: {e}")
     finally:
         conn.close()
