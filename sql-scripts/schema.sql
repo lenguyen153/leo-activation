@@ -763,3 +763,70 @@ ALTER TABLE behavioral_events ENABLE ROW LEVEL SECURITY;
 CREATE POLICY behavioral_events_tenant_rls ON behavioral_events
     USING (tenant_id = current_setting('app.current_tenant_id', true)::uuid)
     WITH CHECK (tenant_id = current_setting('app.current_tenant_id', true)::uuid);
+
+-- ============================================================
+-- 16. USER TICKER AFFINITY (Interest Graph)
+-- Stores the calculated interest score for specific stock tickers
+-- Populated by Batch Job (Python Script)
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS user_ticker_affinity (
+    -- =====================================================
+    -- IDENTITY & TARGET
+    -- =====================================================
+    profile_id VARCHAR(100) NOT NULL, 
+    -- REFERENCES cdp_profiles(profile_id) ON DELETE CASCADE,
+    -- Note: Foreign Key optional depending on sync order. 
+    -- If batch job runs before profile sync, strict FK might fail.
+
+    ticker VARCHAR(20) NOT NULL,
+    -- Stock Symbol (e.g. "AAPL", "NVDA", "VN30")
+
+    -- =====================================================
+    -- SCORING METRICS
+    -- =====================================================
+    raw_score FLOAT DEFAULT 0,
+    -- The actual accumulated points (e.g., 500.0) from events.
+    -- Used as the "Source of Truth" for decay calculations.
+
+    interest_score FLOAT DEFAULT 0,
+    -- The normalized 0-1 score calculated via Asymptotic Curve.
+    -- Used for API querying and segmentation (e.g. > 0.8 is "Super Fan").
+
+    -- =====================================================
+    -- METADATA
+    -- =====================================================
+    last_interaction TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    -- The timestamp of the most recent event that updated this score.
+    -- Critical for calculating Time Decay.
+
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    -- System timestamp for when this row was last modified.
+
+    -- Composite Primary Key ensures one score per User+Ticker pair
+    PRIMARY KEY (profile_id, ticker)
+);
+
+-- Index for fast lookup by ticker (e.g. "Find all users interested in NVDA")
+CREATE INDEX IF NOT EXISTS idx_affinity_ticker 
+ON user_ticker_affinity(ticker);
+
+-- Index for finding top interests for a specific user
+CREATE INDEX IF NOT EXISTS idx_affinity_profile_score 
+ON user_ticker_affinity(profile_id, interest_score DESC);
+
+-- Trigger: Maintain updated_at for user_ticker_affinity
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_trigger
+        WHERE tgname = 'trg_affinity_updated_at'
+        AND tgrelid = 'user_ticker_affinity'::regclass
+    ) THEN
+        CREATE TRIGGER trg_affinity_updated_at
+        BEFORE UPDATE ON user_ticker_affinity
+        FOR EACH ROW
+        EXECUTE FUNCTION update_timestamp();
+    END IF;
+END $$;
