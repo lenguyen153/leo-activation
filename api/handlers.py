@@ -46,9 +46,17 @@ import psycopg
 from fastapi import Query, Depends
 from data_workers.cdp_db_utils import get_users_by_ticker_interest
 from data_utils.settings import DatabaseSettings
-from data_utils.pg_client import get_pg_connection
 
 logger = logging.getLogger("LEO Activation API")
+
+# --- Database Dependency ---
+def get_db():
+    settings = DatabaseSettings()
+    conn = settings.get_pg_connection()
+    try:
+        yield conn
+    finally:
+        conn.close()
 
 
 # ============================================================
@@ -110,10 +118,9 @@ class ZaloTestRequest(BaseModel):
     kwargs: Optional[Dict[str, Any]] = {}
 
 class InterestedUserResponse(BaseModel):
-    """Response schema for interested users."""
-    user_id: str
-    score: float
-    last_interaction: str
+    profile_id: str = Field(..., description="The Unique ID from CDP Profile")
+    score: float = Field(..., description="Normalized Interest Score (0.0 - 1.0)")
+    raw_points: float = Field(..., description="Actual accumulated raw points")
 
 # Constants
 HELP_DOCUMENTATION_URL = '<a href="https://leocdp.com/documents" target="_blank" rel="noopener noreferrer"> https://leocdp.com/documents </a>'
@@ -325,43 +332,43 @@ def create_api_router(agent_router: AgentRouter) -> APIRouter:
         
     
     # ========================================================
-    # 4. Audience Interest Endpoint (NEW)
+    # 4. Audience Interest Endpoint
     # ========================================================
-    # ### MODIFICATION: New API endpoint integration ###
+    # ### MODIFICATION: New dual score ###
     
-    @router.get("/audiences/interested/{ticker}", response_model=List[InterestedUserResponse], summary="Get users interested in a stock")
+    @router.get("/interested/{ticker}", response_model=List[InterestedUserResponse])
     async def get_interested_users_api(
         ticker: str,
-        min_score: float = Query(5.0, description="Minimum interest score threshold"),
-        conn: psycopg.Connection = Depends(get_pg_connection)
+        min_score: float = Query(0.5, description="Minimum normalized interest score (0.0 - 1.0)"),
+        conn: psycopg.Connection = Depends(get_db)
     ):
         """
-        Fetches users who have demonstrated interest in a specific ticker symbol.
-        Requires the Scoring Engine to be running via Cron.
+        Get users interested in a stock based on the new asymptotic scoring logic.
+        
+        - **ticker**: Stock Symbol (e.g., AAPL)
+        - **min_score**: 0.0 to 1.0 (Default 0.5)
         """
         try:
             # 1. Clean inputs
             clean_ticker = ticker.upper().strip()
-            logger.info(f"Fetching audience for ticker: {clean_ticker}, min_score: {min_score}")
             
-            # 2. Call the repository function
+            # 2. Call repository
             results = get_users_by_ticker_interest(conn, clean_ticker, min_score)
             
             # 3. Map DB results to Pydantic Model
             response_data = []
             for row in results:
                 response_data.append({
-                    "user_id": row['user_id'],
-                    "score": row['accumulated_weight'],
+                    # ### MODIFIED: Mapping new DB columns to JSON ###
+                    "profile_id": row['profile_id'],
+                    "score": row['interest_score'], 
+                    "raw_points": row['raw_score'],
                     "last_interaction": str(row['last_interaction']) 
                 })
                 
             return response_data
-            
-        except Exception as e:
-            logger.exception("Failed to fetch interested users")
-            raise HTTPException(status_code=500, detail="Internal Database Error")
 
-    return router
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
 
 

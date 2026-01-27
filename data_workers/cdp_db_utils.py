@@ -113,21 +113,28 @@ def get_users_by_ticker_interest(
     min_score: float
 ) -> List[Dict[str, Any]]:
     """
-    Fetches all users interested in a specific ticker with a score above min_score.
+    Fetches all profiles interested in a specific ticker with a score above min_score.
+    
+    Args:
+        ticker: The stock symbol (e.g., AAPL)
+        min_score: The threshold (0.0 to 1.0) for the interest_score.
     """
+    # ### MODIFIED: Updated columns to match new schema ###
     query = """
-        SELECT user_id, accumulated_weight, last_interaction
+        SELECT 
+            profile_id, 
+            interest_score, 
+            raw_score, 
+            last_interaction
         FROM user_ticker_affinity
         WHERE ticker = %s 
-        AND accumulated_weight >= %s
-        ORDER BY accumulated_weight DESC;
+        AND interest_score >= %s
+        ORDER BY interest_score DESC;
     """
     
     try:
         with conn.cursor() as cur:
             cur.execute(query, (ticker, min_score))
-            # row_factory=dict_row ensures this returns a list of dictionaries
-            # e.g., [{'user_id': 'abc', 'accumulated_weight': 10.5, ...}, ...]
             results = cur.fetchall()
             return results
             
