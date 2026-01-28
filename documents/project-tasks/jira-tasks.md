@@ -18,14 +18,17 @@ style: |
 
 # LEO Activation Platform
 
-## Kế Hoạch Triển Khai POC 18 Ngày
+## Kế Hoạch Triển Khai
 
-**OKR:** Build "AI-driven Activation Engine" with data from CDP  
-**Core Tech:** FastAPI, PostgreSQL 16 (Core Database), PGVector, Apache AGE and Celery (Async),
-**AI Models:** Online Model: Gemini 2.5 Flash-Lite,  Offline Model: FunctionGemma 
+**OKR:** Xây dựng **Activation Engine ứng dụng AI**, khai thác dữ liệu từ CDP  
+**Công nghệ cốt lõi:** FastAPI, PostgreSQL 16 (CSDL trung tâm), PGVector, Apache AGE, Celery (xử lý bất đồng bộ)  
+**Mô hình AI:**  
+- Online: Gemini 2.5 Flash-Lite  
+- Offline: FunctionGemma  
 
-**Owner:** Product & Engineering  
-**Date:** 6/1/2026
+**Task Owners:** CDP Product & Engineering  
+**Ngày bắt đầu:** 06/01/2026
+
 
 > **"Code wins arguments. Ship it."**
 
@@ -40,23 +43,24 @@ Mục tiêu duy nhất: ship được hệ activation chạy thật.
 
 ## Product Vision – LEO Activation
 
-**LEO Activation không phải là hệ gửi thông báo.**  
-Nó là **Decision & Execution Engine** nằm giữa CDP và các kênh liên lạc với **customer / user**
+**LEO Activation không phải hệ thống gửi thông báo.**  
+Đây là **Decision & Execution Engine**, nằm giữa CDP và các kênh tương tác với **customer / user**.
 
-### Chúng ta muốn giải quyết điều gì?
+### Vấn đề hiện tại
 
-- CDP hiện nay **biết rất nhiều**, nhưng **làm rất ít**
-- Campaign được thiết kế thủ công, **chậm và không phản hồi theo ngữ cảnh**
-- Multi-channel tồn tại, nhưng **không có “bộ não” điều phối** tự động cho **personalization** theo từng profile
+- CDP lưu trữ nhiều dữ liệu nhưng **chưa chuyển hoá thành hành động thực tế**
+- Thiếu **Campaign & Alert Center** để kích hoạt tương tác đa kênh (Email, Zalo, Web Push,…)
+- Chưa có **cơ chế AI điều phối tập trung** cho cá nhân hoá theo từng profile
 
-### LEO Activation tồn tại để:
+### Data Activation là module độc lập với CDP, nhằm:
 
-- Biến **dữ liệu → quyết định → hành động** trong _thời gian đúng_
-- Cho phép **AI ra quyết định có kiểm soát** theo kịch bản và content template, không phải đoán mò
-- Mọi hành động activation đều **trace logs được – audit logs được – giải thích được lý do hành động**
+- Chuyển **dữ liệu → quyết định → hành động** theo đúng ngữ cảnh và thời điểm
+- Cho phép **AI ra quyết định có kiểm soát**, dựa trên rule, kịch bản và template
+- Đảm bảo mọi activation đều **traceable – auditable – explainable**
 
-> **Activation không phải là gửi tin thông báo.  
-> Activation là chọn đúng hành động, cho đúng người, vào đúng thời điểm.**
+> **Activation không phải là gửi thông báo.**  
+> **Activation là chọn đúng hành động, cho đúng người, vào đúng thời điểm.**
+
 
 <!--
 Speaker Notes:
@@ -69,7 +73,7 @@ Activation = decision system, không phải messaging system.
 
 ---
 
-![bg right:56% fit](../leo-activation-framework.png)
+![bg right:56% fit](../../leo-activation-framework.png)
 
 ## Bức tranh tổng thể về Flow
 
@@ -87,12 +91,13 @@ Chỉ cần hiểu activation là một luồng xuyên suốt, không phải 1 s
 
 ---
 
-## Timeline Sprint (18 Ngày)
+## Timeline 
 
-- **Phase 1: Nền tảng (Ngày 1-4)**
-- **Phase 2: AI Agents (Ngày 5-9)**
-- **Phase 3: Activation Engine (Ngày 10-14)**
-- **Phase 4: Ổn định hóa (Ngày 15-18)**
+- **Phase 1: Nền tảng**
+- **Phase 2: AI Agents**
+- **Phase 3: Activation Engine**
+- **Phase 4: Alert Center**
+- **Phase 5: Deploy, Fix bugs**
 
 <!--
 Speaker Notes:
@@ -174,7 +179,7 @@ Sync sai = AI sai = activation sai.
 ## [LEO Activation – 03] Segment Snapshot Engine
 
 **WHY – Vì sao task này tồn tại?**  
-Không snapshot thì không audit được. Không audit thì không giải thích được.
+Không snapshot thì không audit được. Không audit thì AI không giải thích được.
 
 **Mô tả:**  
 Implement logic "segment snapshop". Khi campaign kích hoạt, hệ thống phải ghi lại chính xác ai đang ở trong segment tại thời điểm đó.
@@ -199,9 +204,15 @@ Sau này khách hỏi “vì sao tôi nhận tin”, câu trả lời nằm ở 
 
 ---
 
-# Phase 2: AI Agents (Ngày 5-9)
+# Phase 2: AI Agents 
 
-## Mục tiêu: Text-to-Function & Truy vết Quyết định.
+## Mục tiêu: 
+* Tổ chức các chức năng AI Agent như Extended Data Service
+* Xây dựng model Text-to-Function
+* Mở rộng CDP dễ dàng 
+* Truy vết Quyết định.
+
+![bg right:62% fit](agent-management.png)  
 
 <!--
 Speaker Notes:
@@ -268,7 +279,7 @@ Debug AI = đọc bảng này.
 
 ---
 
-# Phase 3: Activation Engine (Ngày 10-14)
+# Phase 3: Activation Engine 
 
 ---
 
@@ -361,24 +372,25 @@ Không được trộn FB logic chung với Zalo hay Email.
 
 ---
 
-## [LEO Activation – 09] Channel Adapter: Push & Telegram
+## [LEO Activation – 09] Channel Adapter: Web Push & App Push
 
-**WHY – Vì sao task này tồn tại?**  
-Kênh realtime giúp người dùng cảm nhận hệ thống đang phản hồi ngay lập tức
+**WHY**  
+Cung cấp kênh realtime để phản hồi ngay sau khi activation được quyết định.
 
-**Mô tả:**  
-Triển khai các kênh thông báo thời gian thực để gửi phản hồi nhanh cho người dùng ngay sau khi có quyết định activation.
+**Mô tả**  
+Triển khai Push Notification cho **Web** và **Mobile App** sử dụng **Firebase Cloud Messaging (FCM)**.
 
-**Technical Tasks:**
+**Technical Tasks**
+1. Tích hợp Firebase FCM (Web + App)
+2. Quản lý device token / subscription theo profile
+3. Push message qua Celery async
+4. Tách queue riêng cho realtime channels
 
-1. Tích hợp Telegram Bot API để gửi tin nhắn trực tiếp.
-2. Tích hợp Push Notification (Firebase FCM hoặc PushAlert).
-3. Tách queue xử lý riêng cho các kênh realtime để không bị chậm do các tác vụ khác.
+**DoD**
+- [ ] Push được gửi < 1s sau dispatch
+- [ ] Token invalid không crash worker
+- [ ] Delivery log ghi nhận đầy đủ
 
-**Definition of Done (DoD):**
-
-- [ ] Thông báo Push được gửi tới thiết bị trong vòng < 1 giây sau khi dispatch.
-- [ ] Tin nhắn Telegram hiển thị đúng nội dung, không lỗi định dạng (Markdown).
 
 <!--
 Speaker Notes:
@@ -389,23 +401,99 @@ dù logic phía sau vẫn chạy đúng.
 
 ---
 
-# Phase 4: Ổn định hóa (Ngày 15-18)
+# 🔔 Phase 4: Alert Center
+
+
+> **Alert Center = signal detection layer** cho Activation Engine
+> Rule-based · Event-based · Channel-aware
+
+![bg right:62% fit](alert-center.png) 
 
 ---
 
-## [LEO Activation – 10] End-to-End Traceability Test
+## [LEO Activation – 10] Threshold Alerts
 
-**WHY – Vì sao task này tồn tại?**  
-Nếu không theo dõi được toàn bộ hành trình của một event, hệ thống sẽ không thể vận hành, debug hay tối ưu trong thực tế.
+**Scope**
+- Score · Event count · KPI
 
-**Mô tả:**  
-Kiểm tra khả năng truy vết đầy đủ một luồng activation hoàn chỉnh:
-từ lúc event được ghi nhận → AI ra quyết định → gửi thông báo → ghi nhận kết quả.
+**Design**
+- Rule-based · Time window · De-duplication
 
-**Definition of Done (DoD):**
+**Tech**
+- Table: `alert_rule`
+- Condition: `above | below | delta_%`
+- Frequency: `once | recurring`
+- Worker → Activation Engine
 
-- [ ] Chỉ với **một câu SQL**, có thể xem toàn bộ hành trình của một user/event.
-- [ ] Không tồn tại log bị thiếu hoặc không liên kết được (orphan log).
+**DoD**
+- [ ] Trigger đúng condition
+- [ ] Có `first_trigger_at`, `last_trigger_at`
+- [ ] Không trigger trùng
+
+
+---
+
+## [LEO Activation – 11] Event-based Alerts
+
+**Scope**
+
+* Campaign · Experiment · Snapshot · Model schedule
+
+**Tech**
+
+* `alert_event`
+* Trigger: `immediate | before_X`
+* Frequency: `one_time | future`
+* Scheduler: Cron / Celery Beat
+
+**DoD**
+
+* [ ] Đúng thời điểm
+* [ ] Không miss event
+* [ ] Enable / disable được
+
+---
+
+## [LEO Activation – 12] Alert Delivery
+
+**Channels**
+
+* Web · App Push · Email · Ops (Slack / Telegram)
+
+**Tech**
+
+* `alert_delivery_setting`
+* Alert → channel mapping
+* Enforce user + tenant policy
+* Log → `delivery_log`
+
+**DoD**
+
+* [ ] ≥1 channel / alert
+* [ ] Channel-level toggle
+* [ ] Audit + consent-safe
+
+---
+
+
+## [LEO Activation – 13] End-to-End Traceability
+
+**Mục tiêu**
+Đảm bảo truy vết đầy đủ toàn bộ vòng đời activation.
+
+**Phạm vi**
+Event ingest → AI decision → dispatch → delivery log
+
+**Kỹ thuật**
+- Correlation ID (`event_id`, `agent_task_id`)
+- Truy vết bằng SQL
+- Database là source of truth
+
+**DoD**
+- [ ] 1 câu SQL truy ra toàn bộ luồng event
+- [ ] Không có log bị thiếu hoặc orphan
+- [ ] Trace đúng theo tenant
+
 
 <!--
 Speaker Notes:
@@ -415,32 +503,47 @@ Nếu product owner không trace được 1 case end-to-end, hệ chưa sẵn s�
 
 ---
 
-## [LEO Activation – 11] Load Testing (Grafana k6)
+## [LEO Activation – 14] Deployment
 
-**WHY – Vì sao task này tồn tại?**  
-Demo chỉ có ý nghĩa khi hệ thống chịu được tải thực tế.  
-Nếu không load test trước, mọi lỗi sẽ bộc lộ ngay khi đang demo.
+**Scope**
+FastAPI · Celery (+Beat) · PostgreSQL 16 · Redis
 
-**Mô tả:**  
-Thực hiện kiểm tra tải cho luồng Activation chính để đảm bảo hệ thống hoạt động ổn định ở mức POC.  
-Sử dụng **Grafana k6** để mô phỏng traffic thực tế và đo độ ổn định của hệ thống.
+**Steps**
+1. Infra: Postgres16 (`pgvector`, `apache-age`), Redis, env/secrets  
+2. DB: apply schema/migrations, verify RLS & indexes  
+3. App: install deps, run FastAPI (Uvicorn)  
+4. Workers: start Celery workers + Beat  
 
-**Tool sử dụng:**
+**DoD**
+- [ ] API healthcheck OK  
+- [ ] Workers consuming jobs  
+- [ ] DB connected, RLS active  
+- [ ] Logs & metrics available
 
-- Grafana k6: https://k6.io/
+---
 
-**Technical Tasks:**
+## [LEO Activation – 15] Load Testing (k6)
 
-1. Viết kịch bản load test bằng Grafana k6 cho luồng activation end-to-end.
-2. Giả lập xử lý tối thiểu **5,000 profiles / phút**.
-3. Theo dõi các chỉ số: response time, error rate, queue backlog (Celery).
-4. Ghi nhận kết quả load test để phục vụ review trước demo.
+**Purpose**
+Validate hệ thống chịu tải ở mức POC trước demo.
 
-**Definition of Done (DoD):**
+**Tool**
+- Grafana k6
 
-- [ ] Hệ thống xử lý ổn định 5,000 profiles trong vòng 1 phút.
-- [ ] Tỉ lệ lỗi API < 1% trong suốt quá trình test.
-- [ ] Không xảy ra DB lock hoặc queue backlog kéo dài.
+**Scope**
+- Activation end-to-end
+
+**Tasks**
+1. Viết k6 scenario cho flow chính
+2. Simulate ≥ 5,000 profiles / phút
+3. Monitor latency, error rate, Celery backlog
+4. Capture test results
+
+**DoD**
+- [ ] 5,000 profiles/phút ổn định
+- [ ] API error rate < 1%
+- [ ] Không DB lock, không queue backlog
+
 
 <!--
 Speaker Notes:
@@ -451,32 +554,30 @@ Nếu fail ở đây, phải fix trước khi nói chuyện feature.
 
 ---
 
-## [LEO Activation – 12] Technical Documentation (Markdown + MkDocs)
+## [LEO Activation – 16] Technical Documentation
 
-**WHY – Vì sao task này tồn tại?**  
-Hệ thống không có tài liệu thì chỉ người viết code mới hiểu.  
-POC muốn bàn giao hoặc mở rộng thì bắt buộc phải có documentation rõ ràng.
+**Purpose**
+Chuẩn hoá tài liệu để bàn giao, vận hành và mở rộng POC.
 
-**Mô tả:**  
-Viết và chuẩn hoá tài liệu kỹ thuật cho LEO Activation bằng **Markdown**,  
-sau đó build thành site tài liệu bằng **MkDocs** để dễ đọc và dễ cập nhật.
+**Scope**
+- Architecture (Activation Flow)
+- Core APIs
+- Database schema
 
-**Tool sử dụng:**
+**Tool**
+- MkDocs
 
-- MkDocs: https://www.mkdocs.org/
+**Tasks**
+1. Viết docs bằng Markdown
+2. Document API & Agent/Dispatcher flow
+3. Mô tả DB tables chính
+4. Build site bằng MkDocs (local/CI)
 
-**Technical Tasks:**
+**DoD**
+- [ ] Docs đầy đủ, dễ đọc
+- [ ] MkDocs build OK
+- [ ] Dev mới đọc hiểu hệ thống
 
-1. Viết tài liệu kiến trúc tổng quan (Activation Flow).
-2. Viết tài liệu API chính (Activation, Agent Task, Dispatcher).
-3. Mô tả cấu trúc database và các bảng quan trọng.
-4. Build site tài liệu bằng MkDocs (local hoặc CI).
-
-**Definition of Done (DoD):**
-
-- [ ] Tài liệu được viết đầy đủ bằng Markdown.
-- [ ] MkDocs build thành công, truy cập được qua link nội bộ.
-- [ ] Nội dung đủ để dev khác đọc và hiểu luồng hệ thống.
 
 <!--
 Speaker Notes:
@@ -485,47 +586,41 @@ Không có doc thì mỗi lần onboarding là một lần giải thích lại t
 Task này để tiết kiệm thời gian cho tương lai.
 -->
 
----
-
-## Hành động ngay (Day 0)
-
-1. **Chốt phạm vi POC & đóng scope**
-
-   - Freeze danh sách tính năng trong tài liệu này. Nếu có yêu cầu mới → đưa sang phase sau POC.
-
-2. **Dựng hạ tầng nền (Postgres + Queue)**
-
-   - Provision PostgreSQL 16 + bật extensions cần thiết, khởi tạo Celery broker & worker skeleton.
-
-3. **Verify schema & chiến lược partition**
-
-   - Lead Dev review `schema.sql`, đặc biệt bảng `marketing_event`. Xác nhận partition, index, RLS chạy đúng ngay từ đầu.
-
-4. **Chuẩn hoá contract dữ liệu & API**
-
-   - Chốt format `cdp_profiles`, `agent_task`, `delivery_log`. Freeze request/response cho các API chính.
-
-5. **Tạo backlog & phân công rõ ràng**
-   - Đẩy toàn bộ task `[LEO Activation – xx]` vào Jira.
-   - Gán owner rõ cho từng ticket trước khi bắt đầu Day 1.
 
 ---
 
 <!-- _class: final-slide -->
 
-## LEO Activation – Task Status Overview
+## LEO Activation – Task Status (01–08)
 
-|             Task ID | Task Name                         | Status         |
-| ------------------: | --------------------------------- | -------------- |
-| LEO Activation – 01 | Khởi tạo Database & Extensions    | 🟩 Done        |
-| LEO Activation – 02 | Worker Đồng bộ Dữ liệu            | 🟦 In Progress |
-| LEO Activation – 03 | Segment Snapshot Engine           | 🟩 Done        |
-| LEO Activation – 04 | FunctionGemma Model Service       | 🟩 Done        |
-| LEO Activation – 05 | Agent Task Orchestrator           | 🟩 Done        |
-| LEO Activation – 06 | Unified Dispatcher & Delivery Log | 🟦 In Progress |
-| LEO Activation – 07 | Channel Adapter: Zalo OA & Email  | 🟩 Done        |
-| LEO Activation – 08 | Channel Adapter: Facebook Page    | ⬜ Todo        |
-| LEO Activation – 09 | Channel Adapter: Push & Telegram  | ⬜ Todo        |
-| LEO Activation – 10 | End-to-End Traceability Test      | ⬜ Todo        |
-| LEO Activation – 11 | Load Testing (Grafana k6)         | ⬜ Todo        |
-| LEO Activation – 12 | Technical Documentation (MkDocs)  | ⬜ Todo        |
+| Task ID | Task Name                         | Status  |
+| ------: | --------------------------------- | ------- |
+|      01 | Database & Extensions             | 🟩 Done |
+|      02 | Data Sync Worker (CDP → PG)       | 🟩 Done |
+|      03 | Segment Snapshot Engine           | 🟩 Done |
+|      04 | FunctionGemma Model Service       | 🟩 Done |
+|      05 | Agent Task Orchestrator           | 🟩 Done |
+|      06 | Unified Dispatcher & Delivery Log | 🟩 Done |
+|      07 | Channel Adapter: Zalo OA & Email  | 🟩 Done |
+|      08 | Channel Adapter: Facebook Page    | ⬜ Todo  |
+
+---
+
+<!-- _class: final-slide -->
+
+## LEO Activation – Task Status (09–16)
+
+| Task ID | Task Name                                  | Status         |
+| ------: | ------------------------------------------ | -------------- |
+|      09 | Channel Adapter: Web Push & App Push (FCM) | ⬜ Todo         |
+|      10 | Alert Center – Threshold Alerts            | 🟦 In Progress |
+|      11 | Alert Center – Event-based Alerts          | 🟦 In Progress |
+|      12 | Alert Center – Alert Delivery              | ⬜ Todo         |
+|      13 | End-to-End Traceability                    | 🟦 In Progress |
+|      14 | Deployment                                 | ⬜ Todo         |
+|      15 | Load Testing (Grafana k6)                  | ⬜ Todo         |
+|      16 | Technical Documentation (MkDocs)           | 🟦 In Progress |
+
+---
+
+![bg right:99% fit](../../leo-activation-framework.png)
