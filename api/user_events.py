@@ -84,7 +84,7 @@ _FALLBACK_PRIORITY = len(_PRIORITY_METRICS)  # for any other event with instrume
 class TopEventItem(BaseModel):
     metricName: str
     instrumentIds: List[str] = Field(default_factory=list)
-    createdAt: float
+    createdAt: List[float] = Field(default_factory=list)
 
 
 # --- HELPERS ---
@@ -180,18 +180,41 @@ FOR event IN cdp_trackingevent
 
 
 def _sort_and_truncate(events: list, top_k: int) -> List[TopEventItem]:
-    """Sort by priority ASC then createdAt DESC, truncate to topK."""
-    events.sort(key=lambda e: float(e.get("createdAt") or 0), reverse=True)
-    events.sort(key=lambda e: _PRIORITY_MAP.get(e["metricName"], _FALLBACK_PRIORITY))
-    events = events[:top_k]
+    """Group by (metricName, instrumentIds), sort by priority ASC then latest createdAt DESC, truncate to topK."""
+    # Group events by (metricName, sorted instrumentIds)
+    groups: dict[tuple, dict] = {}
+    for e in events:
+        ids = e.get("instrumentIds") or []
+        key = (e["metricName"], tuple(sorted(ids)))
+        ts = float(e.get("createdAt") or 0)
+        if key not in groups:
+            groups[key] = {
+                "metricName": e["metricName"],
+                "instrumentIds": ids,
+                "timestamps": [],
+            }
+        groups[key]["timestamps"].append(ts)
+
+    # Sort timestamps DESC within each group
+    for g in groups.values():
+        g["timestamps"].sort(reverse=True)
+
+    # Sort groups: priority ASC, then latest timestamp DESC
+    sorted_groups = sorted(
+        groups.values(),
+        key=lambda g: (
+            _PRIORITY_MAP.get(g["metricName"], _FALLBACK_PRIORITY),
+            -(g["timestamps"][0] if g["timestamps"] else 0),
+        ),
+    )
 
     return [
         TopEventItem(
-            metricName=e["metricName"],
-            instrumentIds=e.get("instrumentIds") or [],
-            createdAt=float(e.get("createdAt") or 0),
+            metricName=g["metricName"],
+            instrumentIds=g["instrumentIds"],
+            createdAt=g["timestamps"],
         )
-        for e in events
+        for g in sorted_groups[:top_k]
     ]
 
 
