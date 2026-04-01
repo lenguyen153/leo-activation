@@ -29,6 +29,8 @@ from main_configs import DATA_SYNC_API_KEY
 
 from api.recommendation_system import router as rec_router
 from api.portfolio import router as portfolio_router
+from api.notification import router as notification_router
+from api.user_events import router as user_events_router
 from fastapi.responses import FileResponse
 
 # --- DB UTILS ---
@@ -140,6 +142,8 @@ def create_api_router(agent_router: AgentRouter) -> APIRouter:
     
     router.include_router(rec_router)
     router.include_router(portfolio_router)
+    router.include_router(notification_router)
+    router.include_router(user_events_router)
 
     # --------------------------------------------------------
     # 1. Tool Calling

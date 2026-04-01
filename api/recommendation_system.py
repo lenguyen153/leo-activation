@@ -1,5 +1,5 @@
-import logging
 import json
+import logging
 import os
 from unittest import result
 import psycopg
@@ -168,7 +168,16 @@ async def get_interested_users_endpoint(
 ):
     """Finds all users interested in a ticker regardless of segment."""
     try:
-        return await _interested_by_segment(ticker, min_score, conn)
+        cache_key = f"leo:rec:interested:all:{ticker}:{min_score}"
+        cached = _cache_get(cache_key)
+        if cached:
+            logger.info(f"[Cache HIT] {cache_key}")
+            return [InterestedUserResponse(**r) for r in json.loads(cached)]
+
+        logger.info(f"[Cache MISS] {cache_key}")
+        results = await _interested_by_segment(ticker, min_score, conn)
+        _cache_set(cache_key, json.dumps([r.model_dump() for r in results]))
+        return results
     except Exception as e:
         logger.error(f"❌ Audience Query Error for '{ticker}': {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -183,7 +192,16 @@ async def get_interested_users_prod_endpoint(
 ):
     """Finds users interested in a ticker, filtered to Production 1invest Users."""
     try:
-        return await _interested_by_segment(ticker, min_score, conn, _SEGMENT_PROD)
+        cache_key = f"leo:rec:interested:prod:{ticker}:{min_score}"
+        cached = _cache_get(cache_key)
+        if cached:
+            logger.info(f"[Cache HIT] {cache_key}")
+            return [InterestedUserResponse(**r) for r in json.loads(cached)]
+
+        logger.info(f"[Cache MISS] {cache_key}")
+        results = await _interested_by_segment(ticker, min_score, conn, _SEGMENT_PROD)
+        _cache_set(cache_key, json.dumps([r.model_dump() for r in results]))
+        return results
     except Exception as e:
         logger.error(f"❌ Audience Query Error (prod) for '{ticker}': {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -198,7 +216,16 @@ async def get_interested_users_uat_endpoint(
 ):
     """Finds users interested in a ticker, filtered to UAT 1invest Users."""
     try:
-        return await _interested_by_segment(ticker, min_score, conn, _SEGMENT_UAT)
+        cache_key = f"leo:rec:interested:uat:{ticker}:{min_score}"
+        cached = _cache_get(cache_key)
+        if cached:
+            logger.info(f"[Cache HIT] {cache_key}")
+            return [InterestedUserResponse(**r) for r in json.loads(cached)]
+
+        logger.info(f"[Cache MISS] {cache_key}")
+        results = await _interested_by_segment(ticker, min_score, conn, _SEGMENT_UAT)
+        _cache_set(cache_key, json.dumps([r.model_dump() for r in results]))
+        return results
     except Exception as e:
         logger.error(f"❌ Audience Query Error (uat) for '{ticker}': {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -221,9 +248,10 @@ async def get_profile_affinity_endpoint(
         cache_key = f"leo:rec:affinity:{target_tenant}:{lookup_key}"
         cached = _cache_get(cache_key)
         if cached:
+            logger.info(f"[Cache HIT] {cache_key}")
             return UserProfileInterestResponse.model_validate_json(cached)
 
-        # --- Cache miss: query DB ---
+        logger.info(f"[Cache MISS] {cache_key}")
         tenant_uuid, _ = resolve_ids(conn, target_tenant, "Active in last 3 months")
         data = get_profile_affinity(conn, tenant_uuid, lookup_key)
 
@@ -264,9 +292,10 @@ async def get_nba_endpoint(
         cache_key = f"leo:rec:nba:{target_tenant}:{user_id}"
         cached = _cache_get(cache_key)
         if cached:
+            logger.info(f"[Cache HIT] {cache_key}")
             return NextBestActionResponse.model_validate_json(cached)
 
-        # --- Cache miss: query DB + run pipeline ---
+        logger.info(f"[Cache MISS] {cache_key}")
         tenant_uuid, _ = resolve_ids(conn, target_tenant, "Active in last 3 months")
         result = get_next_best_action(conn, tenant_uuid, user_id)
 
@@ -292,17 +321,23 @@ async def get_nla_endpoint(
     """
     try:
         target_tenant = os.getenv("TARGET_TENANT", "master")
-        tenant_uuid, _ = resolve_ids(conn, target_tenant, "Active in last 3 months")
 
-        # We reuse the same orchestrator function because it calculates the entire pipeline.
-        # This avoids code duplication or running two separate queries.
+        cache_key = f"leo:rec:nla:{target_tenant}:{user_id}"
+        cached = _cache_get(cache_key)
+        if cached:
+            logger.info(f"[Cache HIT] {cache_key}")
+            return NextLikelyActionResponse.model_validate_json(cached)
+
+        logger.info(f"[Cache MISS] {cache_key}")
+        tenant_uuid, _ = resolve_ids(conn, target_tenant, "Active in last 3 months")
         result = get_next_likely_action(conn, tenant_uuid, user_id)
 
-        # We extract only the PREDICTIVE fields for this endpoint
-        return NextLikelyActionResponse(
+        response = NextLikelyActionResponse(
             profile_id=result["profile_id"],
             next_likely_actions=result["next_likely_actions"]
         )
+        _cache_set(cache_key, response.model_dump_json())
+        return response
 
     except Exception as e:
         logger.error(f"❌ NLA Error for '{user_id}': {e}")

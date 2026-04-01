@@ -1,15 +1,50 @@
 """Portfolio API endpoints for LEO Activation."""
 
+import json
 import logging
 from typing import List, Optional
 
 import psycopg
+import redis
 from fastapi import APIRouter, HTTPException, Query, Depends
 from pydantic import BaseModel
 
 from data_utils.settings import DatabaseSettings
+from main_configs import REDIS_URL, RECOMMENDATION_CACHE_TTL
 
 logger = logging.getLogger("LEO Portfolio API")
+
+# --- REDIS CACHE (module-level singleton, graceful fallback) ---
+_redis_client: Optional[redis.Redis] = None
+try:
+    if REDIS_URL:
+        _redis_client = redis.from_url(REDIS_URL, decode_responses=True)
+        _redis_client.ping()
+        logger.info("Redis cache connected for portfolio endpoints.")
+    else:
+        logger.warning("REDIS_URL not set. Portfolio caching disabled.")
+except Exception as e:
+    logger.warning(f"Redis unavailable — portfolio caching disabled. {e}")
+    _redis_client = None
+
+
+def _cache_get(key: str) -> Optional[str]:
+    if not _redis_client:
+        return None
+    try:
+        return _redis_client.get(key)
+    except Exception as e:
+        logger.error(f"Redis read error: {e}")
+        return None
+
+
+def _cache_set(key: str, value: str) -> None:
+    if not _redis_client:
+        return
+    try:
+        _redis_client.setex(key, RECOMMENDATION_CACHE_TTL, value)
+    except Exception as e:
+        logger.error(f"Redis write error: {e}")
 
 # --- ROUTER SETUP ---
 router = APIRouter(
@@ -82,6 +117,13 @@ async def get_portfolio_user(
     - **omit**: no segment filter
     """
     try:
+        cache_key = f"leo:portfolio:users:{env or 'all'}"
+        cached = _cache_get(cache_key)
+        if cached:
+            logger.info(f"[Cache HIT] {cache_key}")
+            return [PortfolioUserResponse(**r) for r in json.loads(cached)]
+
+        logger.info(f"[Cache MISS] {cache_key}")
         with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
             if env:
                 segments = _SEGMENT_MAP[env]
@@ -89,7 +131,9 @@ async def get_portfolio_user(
             else:
                 cur.execute(_SQL_LOOKUP_USER, (lookup, lookup, lookup))
             rows = cur.fetchall()
-        return [PortfolioUserResponse(**r) for r in rows]
+        results = [PortfolioUserResponse(**r) for r in rows]
+        _cache_set(cache_key, json.dumps([r.model_dump() for r in results]))
+        return results
     except Exception as e:
         logger.error("Portfolio user lookup failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
