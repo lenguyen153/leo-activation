@@ -8,11 +8,6 @@ services:
       - "127.0.0.1:8000:8000"
     env_file:
       - .env
-    environment:
-      # Override for Docker: localhost won't work inside a container
-      - ARANGO_HOST=http://host.docker.internal:8529
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     depends_on:
       - redis
     restart: unless-stopped
