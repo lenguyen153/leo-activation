@@ -8,6 +8,7 @@ strict event-type priority, then by recency.
 
 import json
 import logging
+import time
 from typing import List, Optional
 
 import psycopg
@@ -77,6 +78,7 @@ _PRIORITY_METRICS = [
 
 _PRIORITY_MAP = {name: idx for idx, name in enumerate(_PRIORITY_METRICS)}
 _FALLBACK_PRIORITY = len(_PRIORITY_METRICS)  # for any other event with instrument IDs
+_THREE_MONTHS_SECONDS = 90 * 24 * 3600  # ~3 months in seconds
 
 
 # --- DATA MODELS ---
@@ -134,6 +136,8 @@ def _resolve_fingerprints_by_email(db, email: str) -> List[str]:
 _AQL_TOP_EVENTS_BY_PROFILE = """
 FOR event IN cdp_trackingevent
     FILTER event.refProfileId == @profile_id
+    FILTER event.eventData.timestamp != null
+    FILTER event.eventData.timestamp >= @cutoff_ts
 
     LET single = event.eventData.instrument_id
     LET list   = event.eventData.instrument_id_list
@@ -143,7 +147,6 @@ FOR event IN cdp_trackingevent
         : (IS_ARRAY(list) AND LENGTH(list) > 0 ? list : [])
     )
 
-    FILTER event.eventData.timestamp != null
     FILTER LENGTH(ids) > 0
     FILTER event.metricName IN @priority_metrics OR LENGTH(ids) > 0
 
@@ -158,6 +161,8 @@ FOR event IN cdp_trackingevent
 _AQL_TOP_EVENTS_BY_FINGERPRINT = """
 FOR event IN cdp_trackingevent
     FILTER event.fingerprintId IN @fingerprints
+    FILTER event.eventData.timestamp != null
+    FILTER event.eventData.timestamp >= @cutoff_ts
 
     LET single = event.eventData.instrument_id
     LET list   = event.eventData.instrument_id_list
@@ -167,7 +172,6 @@ FOR event IN cdp_trackingevent
         : (IS_ARRAY(list) AND LENGTH(list) > 0 ? list : [])
     )
 
-    FILTER event.eventData.timestamp != null
     FILTER LENGTH(ids) > 0
     FILTER event.metricName IN @priority_metrics OR LENGTH(ids) > 0
 
@@ -225,6 +229,7 @@ def _fetch_top_events(
     top_k: int,
 ) -> List[TopEventItem]:
     db = _get_arango_db()
+    cutoff_ts = time.time() - _THREE_MONTHS_SECONDS
 
     # Path 1: base_account_id → PG lookup → refProfileId in Arango
     if base_account_id:
@@ -233,7 +238,7 @@ def _fetch_top_events(
             raise HTTPException(status_code=404, detail=f"No portfolio found for baseAccountId '{base_account_id}'.")
         cursor = db.aql.execute(
             _AQL_TOP_EVENTS_BY_PROFILE,
-            bind_vars={"profile_id": resolved_pid, "priority_metrics": _PRIORITY_METRICS},
+            bind_vars={"profile_id": resolved_pid, "priority_metrics": _PRIORITY_METRICS, "cutoff_ts": cutoff_ts},
         )
         return _sort_and_truncate(list(cursor), top_k)
 
@@ -241,7 +246,7 @@ def _fetch_top_events(
     if profile_id:
         cursor = db.aql.execute(
             _AQL_TOP_EVENTS_BY_PROFILE,
-            bind_vars={"profile_id": profile_id.strip(), "priority_metrics": _PRIORITY_METRICS},
+            bind_vars={"profile_id": profile_id.strip(), "priority_metrics": _PRIORITY_METRICS, "cutoff_ts": cutoff_ts},
         )
         return _sort_and_truncate(list(cursor), top_k)
 
@@ -252,7 +257,7 @@ def _fetch_top_events(
             raise HTTPException(status_code=404, detail=f"No profile found for email '{email}'.")
         cursor = db.aql.execute(
             _AQL_TOP_EVENTS_BY_FINGERPRINT,
-            bind_vars={"fingerprints": fingerprints, "priority_metrics": _PRIORITY_METRICS},
+            bind_vars={"fingerprints": fingerprints, "priority_metrics": _PRIORITY_METRICS, "cutoff_ts": cutoff_ts},
         )
         return _sort_and_truncate(list(cursor), top_k)
 
