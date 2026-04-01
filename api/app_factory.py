@@ -113,4 +113,13 @@ def create_app() -> FastAPI:
     api_router = create_api_router(agent_router)
     app.include_router(api_router)
 
+    # --------------------
+    # Shutdown hooks
+    # --------------------
+    from api.notification import close_client as close_notify_client
+
+    @app.on_event("shutdown")
+    async def _shutdown_notify_client():
+        await close_notify_client()
+
     return app
