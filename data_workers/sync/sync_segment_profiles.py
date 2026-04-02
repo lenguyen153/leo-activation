@@ -128,11 +128,11 @@ def _execute_sync_logic(
 
             # 7. Populate fingerprint→profile_id Redis cache for real-time CDC pipeline
             # Use a fresh ArangoDB connection to avoid stale/closed session issues
-            # try:
-            #     fresh_arango = db_settings.get_arango_db()
-            #     _populate_fingerprint_cache(fresh_arango, segment_id, segment_name)
-            # except Exception:
-            #     logger.exception("Failed to create ArangoDB connection for fingerprint cache (non-fatal)")
+            try:
+                fresh_arango = db_settings.get_arango_db()
+                _populate_fingerprint_cache(fresh_arango, segment_id, segment_name)
+            except Exception:
+                logger.exception("Failed to create ArangoDB connection for fingerprint cache (non-fatal)")
 
         except Exception as e:
             pg_session.rollback()
