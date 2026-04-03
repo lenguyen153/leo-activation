@@ -104,14 +104,6 @@ except ValueError:
 DATA_SYNC_API_KEY: Optional[str] = os.getenv("DATA_SYNC_API_KEY")
 
 # ============================================================
-# Real-Time Event-Driven Pipeline Configuration
-# ============================================================
-KAFKA_BOOTSTRAP_SERVERS: str = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
-CDC_POLL_INTERVAL_S: int = int(os.getenv("CDC_POLL_INTERVAL_S", "2"))
-ACTIVATION_APP_WEBHOOK_URL: Optional[str] = os.getenv("ACTIVATION_APP_WEBHOOK_URL")
-REALTIME_SCORING_ENABLED: bool = os.getenv("REALTIME_SCORING_ENABLED", "False").lower() in ("1", "true", "yes")
-
-# ============================================================
 # Marketing / Messaging Integrations Configuration
 # ============================================================
 class MarketingConfigs:
@@ -168,24 +160,6 @@ class MarketingConfigs:
     except ValueError:
         ZALO_OA_MAX_RETRIES = 1
 
-    # -------- Zalo Promotional Messages (Tin Truyền Thông) --------
-    ZALO_PROMO_API_URL: str = os.getenv(
-        "ZALO_PROMO_API_URL",
-        "https://openapi.zalo.me/v3.0/oa/message/promotion",
-    )
-    try:
-        ZALO_PROMO_INTEREST_THRESHOLD: float = float(
-            os.getenv("ZALO_PROMO_INTEREST_THRESHOLD", "0.70")
-        )
-    except ValueError:
-        raise RuntimeError("ZALO_PROMO_INTEREST_THRESHOLD must be a valid float")
-    try:
-        ZALO_PROMO_EVENT_COUNT_THRESHOLD: int = int(
-            os.getenv("ZALO_PROMO_EVENT_COUNT_THRESHOLD", "3")
-        )
-    except ValueError:
-        raise RuntimeError("ZALO_PROMO_EVENT_COUNT_THRESHOLD must be a valid integer")
-
     # --------------------------------------------------------
     # Facebook Page Messaging
     # --------------------------------------------------------
@@ -200,9 +174,3 @@ class MarketingConfigs:
     # Firebase Cloud Messaging (FCM)
     FCM_PROJECT_ID: Optional[str] = os.getenv("FCM_PROJECT_ID")
     FCM_SERVICE_ACCOUNT_JSON: Optional[str] = os.getenv("FCM_SERVICE_ACCOUNT_JSON")
-
-    # --------------------------------------------------------
-    # Omnichannel Admin Notify (Push via core system)
-    # --------------------------------------------------------
-    ADMINNOTIFY_BASE_URL: str = os.getenv("ADMINNOTIFY_BASE_URL", "https://your-core-system.com")
-    ADMINNOTIFY_ENDPOINT: str = os.getenv("ADMINNOTIFY_ENDPOINT", "/fo/api/adminnotify")
