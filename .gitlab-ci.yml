@@ -26,6 +26,22 @@ build_core_api:
     - docker build --cache-from $IMAGE_LATEST --build-arg BUILDKIT_INLINE_CACHE=1 -t $IMAGE_TAG -t $IMAGE_LATEST .
     - docker push $IMAGE_TAG
     - docker push $IMAGE_LATEST
+
+    # Build and push CDC Poller
+    - docker build -f services/cdc_poller/Dockerfile --cache-from $CI_REGISTRY_IMAGE/cdc-poller:latest -t $CI_REGISTRY_IMAGE/cdc-poller:$CI_COMMIT_SHA -t $CI_REGISTRY_IMAGE/cdc-poller:latest .
+    - docker push $CI_REGISTRY_IMAGE/cdc-poller:$CI_COMMIT_SHA
+    - docker push $CI_REGISTRY_IMAGE/cdc-poller:latest
+
+    # Build and push Scoring Consumer
+    - docker build -f services/scoring_consumer/Dockerfile --cache-from $CI_REGISTRY_IMAGE/scoring-consumer:latest -t $CI_REGISTRY_IMAGE/scoring-consumer:$CI_COMMIT_SHA -t $CI_REGISTRY_IMAGE/scoring-consumer:latest .
+    - docker push $CI_REGISTRY_IMAGE/scoring-consumer:$CI_COMMIT_SHA
+    - docker push $CI_REGISTRY_IMAGE/scoring-consumer:latest
+
+    # Build and push NBA Publisher
+    - docker build -f services/nba_publisher/Dockerfile --cache-from $CI_REGISTRY_IMAGE/nba-publisher:latest -t $CI_REGISTRY_IMAGE/nba-publisher:$CI_COMMIT_SHA -t $CI_REGISTRY_IMAGE/nba-publisher:latest .
+    - docker push $CI_REGISTRY_IMAGE/nba-publisher:$CI_COMMIT_SHA
+    - docker push $CI_REGISTRY_IMAGE/nba-publisher:latest
+    
   rules:
     - if: $CI_COMMIT_BRANCH
 
