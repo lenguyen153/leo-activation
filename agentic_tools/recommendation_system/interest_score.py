@@ -24,6 +24,47 @@ DUMMY_JOURNEY_STAGE_ID = "default_stage"
 DUMMY_REC_MODEL = "default_model"
 DUMMY_PRODUCT_TYPE = "stock"
 
+# Events handled by real-time CDC pipeline — excluded from batch to avoid double-counting.
+# Must stay in sync with services/cdc_poller/filters.py:CDC_METRIC_NAMES
+CDC_METRIC_NAMES = [
+    "ticker-view",
+    "watchlist-add",
+    "order-created",
+    "order-preview",
+    "order-canceled",
+]
+
+# CDC health: if the poller tick hasn't advanced in this many seconds,
+# the batch job assumes CDC is down and processes ALL events.
+CDC_STALENESS_THRESHOLD_S = 600  # 10 minutes
+
+
+# --- PURE SCORING FUNCTION (reused by real-time consumer) ---
+def compute_incremental_score(
+    current_raw: float,
+    incoming_points: float,
+    prev_interaction: datetime.datetime | None,
+    last_event_time: datetime.datetime,
+) -> tuple[float, float]:
+    """
+    Compute decay + accumulate raw score, then normalize to interest_score.
+
+    Returns (final_raw_score, final_interest_score).
+    """
+    if current_raw > 0 and prev_interaction:
+        if prev_interaction.tzinfo is None:
+            prev_interaction = prev_interaction.replace(tzinfo=datetime.timezone.utc)
+        time_diff = last_event_time - prev_interaction
+        days_elapsed = max(time_diff.total_seconds() / 86400.0, 0)
+        decay_factor = 0.5 ** (days_elapsed / HALF_LIFE_DAYS)
+        final_raw = (current_raw * decay_factor) + incoming_points
+    else:
+        final_raw = incoming_points
+
+    final_interest = final_raw / (final_raw + SCORING_K_FACTOR)
+    return final_raw, final_interest
+
+
 # --- 1. ID RESOLUTION (PostgreSQL Source of Truth) ---
 def resolve_ids(conn, tenant_name: str, segment_name: str) -> tuple:
     """
@@ -78,21 +119,55 @@ def resolve_ids(conn, tenant_name: str, segment_name: str) -> tuple:
         return t_uuid, s_uuid
     
 
+def _is_cdc_healthy() -> bool:
+    """
+    Check if the CDC poller is alive by verifying its tick was updated recently.
+    Returns False if Redis is unreachable or tick is stale — batch takes over.
+    """
+    import redis
+    cdc_redis_url = os.getenv("CDC_REDIS_URL", "redis://localhost:6379/2")
+    try:
+        r = redis.from_url(cdc_redis_url, decode_responses=True)
+        # Check tick freshness via the leader key TTL (renewed every 10s, expires 30s)
+        leader_ttl = r.ttl("cdc:poller:leader")
+        if leader_ttl and leader_ttl > 0:
+            return True
+        # No active leader — CDC is down
+        return False
+    except Exception:
+        logger.warning("Cannot reach CDC Redis — assuming CDC is down")
+        return False
+
+
 def get_batch_scoring_data(settings: DatabaseSettings, start_time_iso: str, end_time_iso: str, segment_uuid: str) -> List[Dict[str, Any]]:
     """
     Fetches events from ArangoDB.
     CRITICAL CHANGE: No tenant_id in Arango. We filter purely by the resolved Segment UUID.
+
+    Failsafe: if CDC pipeline is unhealthy, processes ALL events including
+    the 5 CDC metricNames. Otherwise excludes them to avoid double-counting.
     """
     db = settings.get_arango_db()
     if not db:
         return []
-    
+
+    cdc_healthy = _is_cdc_healthy()
+    if cdc_healthy:
+        exclude_metrics = CDC_METRIC_NAMES
+        logger.info("CDC is healthy — batch will skip CDC metricNames: %s", exclude_metrics)
+    else:
+        exclude_metrics = []  # NOT IN [] is always true → all events pass
+        logger.warning("CDC appears DOWN — batch failsafe: processing ALL metricNames")
+
     try:
         # Main Query: Event -> Profile -> Metric
         scoring_query = """
         FOR event IN cdp_trackingevent
             FILTER event.createdAt >= @start_time
             FILTER event.createdAt < @end_time
+
+            // Skip events already handled by real-time CDC pipeline
+            FILTER event.metricName NOT IN @cdc_metric_names
 
             // Build a unified ticker list from either field:
             //  - instrument_id (string)  -> wrap in array
@@ -135,7 +210,8 @@ def get_batch_scoring_data(settings: DatabaseSettings, start_time_iso: str, end_
         bind_vars = {
             'segment_id': segment_uuid,
             'start_time': start_time_iso,
-            'end_time': end_time_iso
+            'end_time': end_time_iso,
+            'cdc_metric_names': exclude_metrics,
         }
         
         cursor = db.aql.execute(scoring_query, bind_vars=bind_vars)
@@ -210,31 +286,25 @@ def run_batch_scoring_job(settings: DatabaseSettings, start_time: str, end_time:
                       DUMMY_JOURNEY_MAP_ID, DUMMY_JOURNEY_STAGE_ID, DUMMY_REC_MODEL))
                 
                 record = cur.fetchone()
-                final_raw_score = 0.0
-                
+
                 if record:
                     if isinstance(record, dict):
-                        current_raw = float(record['raw_score'] or 0.0) 
+                        current_raw = float(record['raw_score'] or 0.0)
                         prev_interaction = record['last_interaction_at']
                     else:
                         current_raw = float(record[0] or 0.0)
                         prev_interaction = record[1]
 
-                    if prev_interaction and prev_interaction.tzinfo is None:
-                        prev_interaction = prev_interaction.replace(tzinfo=datetime.timezone.utc)
                     if not prev_interaction:
                          prev_interaction = last_event_time
-
-                    time_diff = last_event_time - prev_interaction
-                    days_elapsed = max(time_diff.total_seconds() / 86400.0, 0)
-                    decay_factor = 0.5 ** (days_elapsed / HALF_LIFE_DAYS)
-                    
-                    final_raw_score = (current_raw * decay_factor) + incoming_points
                 else:
-                    final_raw_score = incoming_points
+                    current_raw = 0.0
+                    prev_interaction = None
 
-                # 2. Normalize Score
-                final_interest_score = final_raw_score / (final_raw_score + SCORING_K_FACTOR)
+                # 2. Compute score via shared pure function
+                final_raw_score, final_interest_score = compute_incremental_score(
+                    current_raw, incoming_points, prev_interaction, last_event_time
+                )
                 
                 # 3. Upsert
                 # ADDED: recommendation_model to INSERT and ON CONFLICT

@@ -1,0 +1,99 @@
+# CDC Pipeline — production overlay
+# Usage: docker compose -f docker-compose.yml -f docker-compose.prod.cdc.yml up -d
+#
+# This file adds Kafka, Zookeeper, 3 CDC microservices, and Celery (CDC-only mode)
+# to the existing production docker-compose.yml.
+#
+# Prerequisites:
+#   - Push images to registry first (see below)
+#   - Add CDC env vars to .env (see bottom of this file)
+#
+# Build & push:
+#   docker build -f services/cdc_poller/Dockerfile -t registry.innotech.vn/cdp-ai/c720-data-activation/cdc-poller:latest .
+#   docker build -f services/scoring_consumer/Dockerfile -t registry.innotech.vn/cdp-ai/c720-data-activation/scoring-consumer:latest .
+#   docker build -f services/nba_publisher/Dockerfile -t registry.innotech.vn/cdp-ai/c720-data-activation/nba-publisher:latest .
+#   docker push registry.innotech.vn/cdp-ai/c720-data-activation/cdc-poller:latest
+#   docker push registry.innotech.vn/cdp-ai/c720-data-activation/scoring-consumer:latest
+#   docker push registry.innotech.vn/cdp-ai/c720-data-activation/nba-publisher:latest
+
+services:
+  # ============================================================
+  # Infrastructure
+  # ============================================================
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.0
+    container_name: prod_zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    restart: unless-stopped
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    container_name: prod_kafka
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_LOG_RETENTION_HOURS: 168  # 7 days
+    restart: unless-stopped
+
+  # ============================================================
+  # CDC Microservices
+  # ============================================================
+  cdc-poller:
+    image: registry.innotech.vn/cdp-ai/c720-data-activation/cdc-poller:latest
+    container_name: prod_cdc_poller
+    env_file: .env
+    environment:
+      - REDIS_URL=redis://redis:6379/2
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - REALTIME_SCORING_ENABLED=${REALTIME_SCORING_ENABLED:-False}
+    depends_on:
+      - redis
+      - kafka
+    restart: unless-stopped
+
+  scoring-consumer:
+    image: registry.innotech.vn/cdp-ai/c720-data-activation/scoring-consumer:latest
+    container_name: prod_scoring_consumer
+    env_file: .env
+    environment:
+      - REDIS_URL=redis://redis:6379/2
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - REALTIME_SCORING_ENABLED=${REALTIME_SCORING_ENABLED:-False}
+    depends_on:
+      - redis
+      - kafka
+    restart: unless-stopped
+
+  nba-publisher:
+    image: registry.innotech.vn/cdp-ai/c720-data-activation/nba-publisher:latest
+    container_name: prod_nba_publisher
+    env_file: .env
+    environment:
+      - REDIS_URL=redis://redis:6379/2
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - REALTIME_SCORING_ENABLED=${REALTIME_SCORING_ENABLED:-False}
+    depends_on:
+      - redis
+      - kafka
+    restart: unless-stopped
+
+# ============================================================
+# Required .env additions:
+# ============================================================
+# REALTIME_SCORING_ENABLED=False
+# KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+# CDC_REDIS_URL=redis://redis:6379/2
+# CDC_POLL_INTERVAL_S=2
+# TARGET_SEGMENT=Active last 3 months
+# TARGET_TENANT=master
+#
+# Host crontab (no Celery needed):
+#   */5 * * * *  /build/leo-activation/c720-data-activation/shell-scripts/populate_fingerprint_cache.sh >> /var/log/fp_cache.log 2>&1
+#   0 */6 * * *  /build/leo-activation/c720-data-activation/shell-scripts/batch_scoring_reconciliation.sh >> /var/log/batch_reconciliation.log 2>&1
