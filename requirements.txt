@@ -78,15 +78,3 @@ celery[redis]
 redis
 # In-memory data store
 # Used for caching, rate limiting, Celery broker, and ephemeral state
-
-confluent-kafka>=2.3.0
-# Kafka client for CDC event streaming pipeline
-# Used by CDC poller, scoring consumer, and NBA publisher
-
-structlog>=24.0
-# Structured logging for microservices
-# Provides JSON-formatted logs for observability
-
-prometheus_client>=0.20
-# Prometheus metrics exposition
-# Each microservice exposes /metrics for scraping
