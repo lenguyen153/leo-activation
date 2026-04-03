@@ -8,10 +8,6 @@ services:
       - "127.0.0.1:8000:8000"
     env_file:
       - .env
-    environment:
-      - ARANGO_HOST=${ARANGO_HOST}
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     depends_on:
       - redis
     restart: unless-stopped
