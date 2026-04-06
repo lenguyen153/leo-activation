@@ -117,7 +117,7 @@ async def get_portfolio_user(
     - **omit**: no segment filter
     """
     try:
-        cache_key = f"leo:portfolio:users:{env or 'all'}"
+        cache_key = f"leo:portfolio:users:{lookup}:{env or 'all'}"
         cached = _cache_get(cache_key)
         if cached:
             logger.info(f"[Cache HIT] {cache_key}")
