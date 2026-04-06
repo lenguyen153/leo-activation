@@ -70,7 +70,7 @@ async def close_client() -> None:
 # Router
 # ============================================================
 
-router = APIRouter(prefix="/notification", tags=["notification"])
+router = APIRouter(prefix="/notification", tags=["Notification"])
 
 
 @router.post("/send", status_code=200)
