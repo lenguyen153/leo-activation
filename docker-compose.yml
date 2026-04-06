@@ -144,3 +144,19 @@ services:
       - redis
       - kafka
     restart: unless-stopped
+
+  ws-forwarder:
+    build:
+      context: .
+      dockerfile: services/ws_forwarder/Dockerfile
+    container_name: my_ws_forwarder
+    env_file: .env
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - WS_FORWARDER_URL=${WS_FORWARDER_URL:-}
+      - WS_FORWARDER_INPUT_TOPIC=${WS_FORWARDER_INPUT_TOPIC:-leo.score.updates}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - kafka
+    restart: unless-stopped
