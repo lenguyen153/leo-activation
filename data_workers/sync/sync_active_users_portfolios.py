@@ -32,7 +32,7 @@ ACCOUNT_TYPE_MAP = {
     "8": "DERIVATIVES",
 }
 
-CUTOFF_DAYS = 45
+CUTOFF_DAYS = 30
 
 # --------------------------------------------------
 # AQL Query — latest asset-detail-view per account
@@ -74,6 +74,48 @@ FOR event IN cdp_trackingevent
         rtt:              latest.RTT,
         holdings:         latest.holdings,
         asset_allocation: latest.asset_allocation,
+        last_seen:        grp[0].event.createdAt
+    }
+"""
+
+# --------------------------------------------------
+# AQL Query — latest login-success per account
+# --------------------------------------------------
+
+AQL_LOGIN_SUCCESS = """
+FOR event IN cdp_trackingevent
+    FILTER event.metricName == "login-success"
+    FILTER event.createdAt >= @cutoff
+    FILTER HAS(event.eventData, "account_id")
+    FILTER event.eventData.account_id != null
+    FILTER event.eventData.account_id != ""
+
+    LET ref_id = (
+        event.refProfileId != null AND event.refProfileId != ""
+        ? event.refProfileId
+        : event.fingerprintId
+    )
+    FILTER ref_id != null
+
+    SORT event.createdAt DESC
+
+    COLLECT
+        account_id = event.eventData.account_id,
+        profile_id = ref_id
+    INTO grp
+
+    RETURN {
+        account_id:       account_id,
+        profile_id:       profile_id,
+        nav:              null,
+        cash_total:       null,
+        debt_total:       null,
+        collaterals:      null,
+        margin_limit:     null,
+        pnl:              null,
+        rtt:              null,
+        holdings:         null,
+        asset_allocation: null,
         last_seen:        grp[0].event.createdAt
     }
 """
@@ -335,8 +377,15 @@ def sync_active_users_portfolios(
         # 2. Extract from ArangoDB (createdAt is ISO 8601 string)
         cutoff = (datetime.now(timezone.utc) - timedelta(days=CUTOFF_DAYS)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
         db = settings.get_arango_db()
-        events = list(db.aql.execute(AQL_ASSET_DETAIL_VIEWS, bind_vars={"cutoff": cutoff}))
-        logger.info("Fetched %d asset-detail-view rows from ArangoDB", len(events))
+
+        login_events = list(db.aql.execute(AQL_LOGIN_SUCCESS, bind_vars={"cutoff": cutoff}))
+        logger.info("Fetched %d login-success rows from ArangoDB", len(login_events))
+
+        detail_events = list(db.aql.execute(AQL_ASSET_DETAIL_VIEWS, bind_vars={"cutoff": cutoff}))
+        logger.info("Fetched %d asset-detail-view rows from ArangoDB", len(detail_events))
+
+        # login-success first (priority), then asset-detail-view as fallback
+        events = login_events + detail_events
 
         if not events:
             logger.info("No events found. Nothing to sync.")
