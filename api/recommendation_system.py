@@ -232,9 +232,9 @@ async def get_interested_users_uat_endpoint(
 
 
 # 2. PROFILE 360 (What does this user like?)
-@router.get("/profile_affinity/{lookup_key}", response_model=UserProfileInterestResponse)
+@router.get("/profile_affinity/{profile_id}", response_model=UserProfileInterestResponse)
 async def get_profile_affinity_endpoint(
-    lookup_key: str = Path(..., description="Profile ID, Email, or Identity"),
+    profile_id: str = Path(..., description="Profile ID"),
     conn: psycopg.Connection = Depends(get_db)
 ):
     """
@@ -245,7 +245,7 @@ async def get_profile_affinity_endpoint(
         target_tenant = os.getenv("TARGET_TENANT", "master")
 
         # --- Cache read ---
-        cache_key = f"leo:rec:affinity:{target_tenant}:{lookup_key}"
+        cache_key = f"leo:rec:affinity:{target_tenant}:{profile_id}"
         cached = _cache_get(cache_key)
         if cached:
             logger.info(f"[Cache HIT] {cache_key}")
@@ -253,7 +253,7 @@ async def get_profile_affinity_endpoint(
 
         logger.info(f"[Cache MISS] {cache_key}")
         tenant_uuid, _ = resolve_ids(conn, target_tenant, "Active in last 3 months")
-        data = get_profile_affinity(conn, tenant_uuid, lookup_key)
+        data = get_profile_affinity(conn, tenant_uuid, profile_id)
 
         if not data:
             return UserProfileInterestResponse(
@@ -270,14 +270,14 @@ async def get_profile_affinity_endpoint(
         return response
 
     except Exception as e:
-        logger.error(f"❌ Profile Lookup Error for '{lookup_key}': {e}")
+        logger.error(f"❌ Profile Lookup Error for '{profile_id}': {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 # 3. NEXT BEST ACTION (What should we do with them?)
-@router.get("/nba/{user_id}", response_model=NextBestActionResponse)
+@router.get("/nba/{profile_id}", response_model=NextBestActionResponse)
 async def get_nba_endpoint(
-    user_id: str = Path(..., description="The target User Profile ID"),
+    profile_id: str = Path(..., description="The target User Profile ID"),
     conn: psycopg.Connection = Depends(get_db)
 ):
     """
@@ -289,7 +289,7 @@ async def get_nba_endpoint(
         target_tenant = os.getenv("TARGET_TENANT", "master")
 
         # --- Cache read ---
-        cache_key = f"leo:rec:nba:{target_tenant}:{user_id}"
+        cache_key = f"leo:rec:nba:{target_tenant}:{profile_id}"
         cached = _cache_get(cache_key)
         if cached:
             logger.info(f"[Cache HIT] {cache_key}")
@@ -297,7 +297,7 @@ async def get_nba_endpoint(
 
         logger.info(f"[Cache MISS] {cache_key}")
         tenant_uuid, _ = resolve_ids(conn, target_tenant, "Active in last 3 months")
-        result = get_next_best_action(conn, tenant_uuid, user_id)
+        result = get_next_best_action(conn, tenant_uuid, profile_id)
 
         response = NextBestActionResponse(
             profile_id=result["profile_id"],
@@ -307,13 +307,13 @@ async def get_nba_endpoint(
         return response
 
     except Exception as e:
-        logger.error(f"❌ NBA Error for '{user_id}': {e}")
+        logger.error(f"❌ NBA Error for '{profile_id}': {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # 4. NEXT LIKELY ACTION (Predictive - What THEY do)
-@router.get("/nla/{user_id}", response_model=NextLikelyActionResponse)
+@router.get("/nla/{profile_id}", response_model=NextLikelyActionResponse)
 async def get_nla_endpoint(
-    user_id: str = Path(..., description="The target User Profile ID"),
+    profile_id: str = Path(..., description="The target User Profile ID"),
     conn: psycopg.Connection = Depends(get_db)
 ):
     """
@@ -322,7 +322,7 @@ async def get_nla_endpoint(
     try:
         target_tenant = os.getenv("TARGET_TENANT", "master")
 
-        cache_key = f"leo:rec:nla:{target_tenant}:{user_id}"
+        cache_key = f"leo:rec:nla:{target_tenant}:{profile_id}"
         cached = _cache_get(cache_key)
         if cached:
             logger.info(f"[Cache HIT] {cache_key}")
@@ -330,7 +330,7 @@ async def get_nla_endpoint(
 
         logger.info(f"[Cache MISS] {cache_key}")
         tenant_uuid, _ = resolve_ids(conn, target_tenant, "Active in last 3 months")
-        result = get_next_likely_action(conn, tenant_uuid, user_id)
+        result = get_next_likely_action(conn, tenant_uuid, profile_id)
 
         response = NextLikelyActionResponse(
             profile_id=result["profile_id"],
@@ -340,7 +340,7 @@ async def get_nla_endpoint(
         return response
 
     except Exception as e:
-        logger.error(f"❌ NLA Error for '{user_id}': {e}")
+        logger.error(f"❌ NLA Error for '{profile_id}': {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

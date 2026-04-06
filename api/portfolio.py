@@ -95,6 +95,26 @@ _SEGMENT_MAP = {
 _SEGMENT_ALL = ["UAT 1invest Users", "Production 1invest Users"]
 
 
+# --- HELPERS ---
+
+def _backfill_base_account_id(results: list) -> None:
+    """
+    CDP can have duplicate profiles with the same email.
+    Only one may have a portfolio row (and thus a base_account_id).
+    Propagate it to siblings that share the same primary_email.
+    """
+    # Build email → base_account_id map from rows that have it
+    email_to_base = {}
+    for r in results:
+        if r.base_account_id and r.primary_email:
+            email_to_base.setdefault(r.primary_email, r.base_account_id)
+
+    # Fill nulls from siblings
+    for r in results:
+        if not r.base_account_id and r.primary_email:
+            r.base_account_id = email_to_base.get(r.primary_email)
+
+
 # --- ENDPOINTS ---
 @router.get("/user", response_model=List[PortfolioUserResponse])
 async def get_portfolio_user(
@@ -132,6 +152,11 @@ async def get_portfolio_user(
                 cur.execute(_SQL_LOOKUP_USER, (lookup, lookup, lookup))
             rows = cur.fetchall()
         results = [PortfolioUserResponse(**r) for r in rows]
+
+        # Backfill: if sibling profiles share the same email,
+        # propagate base_account_id from the one that has it
+        _backfill_base_account_id(results)
+
         _cache_set(cache_key, json.dumps([r.model_dump() for r in results]))
         return results
     except Exception as e:
