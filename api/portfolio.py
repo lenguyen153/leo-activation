@@ -70,6 +70,19 @@ class PortfolioUserResponse(BaseModel):
     base_account_id: Optional[str] = None
 
 
+class PortfolioAccountResponse(BaseModel):
+    account_id: str
+    base_account_id: str
+    account_type: str
+    nav: float = 0
+    cash_total: float = 0
+    debt_total: float = 0
+    collaterals: float = 0
+    margin_limit: float = 0
+    pnl: float = 0
+    rtt_ratio: Optional[float] = None
+
+
 # --- SQL ---
 _SQL_LOOKUP_USER = """
     SELECT DISTINCT
@@ -161,4 +174,47 @@ async def get_portfolio_user(
         return results
     except Exception as e:
         logger.error("Portfolio user lookup failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- SQL ---
+_SQL_ACCOUNTS_BY_BASE = """
+    SELECT account_id, base_account_id, account_type,
+           nav, cash_total, debt_total, collaterals,
+           margin_limit, pnl, rtt_ratio
+    FROM portfolios
+    WHERE base_account_id = %s
+"""
+
+
+@router.get("/accounts", response_model=List[PortfolioAccountResponse])
+async def get_portfolio_accounts(
+    baseAccountId: str = Query(..., description="Base account ID"),
+    conn: psycopg.Connection = Depends(get_db),
+):
+    """
+    Returns all sub-accounts (cash, margin, etc.) for a given base_account_id.
+    """
+    try:
+        cache_key = f"leo:portfolio:accounts:{baseAccountId}"
+        cached = _cache_get(cache_key)
+        if cached:
+            logger.info(f"[Cache HIT] {cache_key}")
+            return [PortfolioAccountResponse(**r) for r in json.loads(cached)]
+
+        logger.info(f"[Cache MISS] {cache_key}")
+        with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
+            cur.execute(_SQL_ACCOUNTS_BY_BASE, (baseAccountId.strip(),))
+            rows = cur.fetchall()
+
+        if not rows:
+            raise HTTPException(status_code=404, detail=f"No accounts found for baseAccountId '{baseAccountId}'.")
+
+        results = [PortfolioAccountResponse(**r) for r in rows]
+        _cache_set(cache_key, json.dumps([r.model_dump() for r in results]))
+        return results
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Portfolio accounts query failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
