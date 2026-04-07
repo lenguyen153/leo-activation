@@ -41,6 +41,11 @@ build_core_api:
     - docker build -f services/nba_publisher/Dockerfile --cache-from $CI_REGISTRY_IMAGE/nba-publisher:latest -t $CI_REGISTRY_IMAGE/nba-publisher:$CI_COMMIT_SHA -t $CI_REGISTRY_IMAGE/nba-publisher:latest .
     - docker push $CI_REGISTRY_IMAGE/nba-publisher:$CI_COMMIT_SHA
     - docker push $CI_REGISTRY_IMAGE/nba-publisher:latest
+
+    # Build and push WS Forwarder
+    - docker build -f services/ws_forwarder/Dockerfile --cache-from $CI_REGISTRY_IMAGE/ws-forwarder:latest -t $CI_REGISTRY_IMAGE/ws-forwarder:$CI_COMMIT_SHA -t $CI_REGISTRY_IMAGE/ws-forwarder:latest .
+    - docker push $CI_REGISTRY_IMAGE/ws-forwarder:$CI_COMMIT_SHA
+    - docker push $CI_REGISTRY_IMAGE/ws-forwarder:latest
     
   rules:
     - if: $CI_COMMIT_BRANCH

@@ -13,8 +13,10 @@ import os
 import signal
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import redis
+import requests
 from prometheus_client import Counter, Histogram, start_http_server
 
 from agentic_tools.recommendation_system.interest_score import (
@@ -28,6 +30,7 @@ from agentic_tools.recommendation_system.interest_score import (
 from services.scoring_consumer.config import (
     CONSUMER_GROUP,
     DLQ_TOPIC,
+    EVENT_FORWARD_URL,
     INPUT_TOPIC,
     KAFKA_BOOTSTRAP_SERVERS,
     MAX_RETRIES,
@@ -43,7 +46,7 @@ from services.scoring_consumer.pg_writer import (
     validate_profile,
 )
 from services.shared.kafka_utils import create_consumer, create_producer
-from services.shared.schemas import CdpEventMessage, ScoreUpdateMessage
+from services.shared.schemas import CdpEventMessage, ScoredEventForward, ScoreUpdateMessage
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +57,18 @@ SCORING_ERRORS = Counter("scoring_errors_total", "Total scoring errors")
 
 _running = True
 _tenant_id_cache: str | None = None
+_forward_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="event-fwd")
+FORWARD_ERRORS = Counter("scoring_forward_errors_total", "HTTP forward failures")
+
+
+def _forward_scored_event(payload_json: str) -> None:
+    """POST enriched event to external API (runs in background thread)."""
+    try:
+        requests.post(EVENT_FORWARD_URL, data=payload_json,
+                      headers={"Content-Type": "application/json"}, timeout=5)
+    except Exception:
+        FORWARD_ERRORS.inc()
+        logger.exception("Event forward POST failed")
 
 
 def _resolve_tenant_id(conn) -> str:
@@ -184,6 +199,7 @@ def main():
                         tenant_id=tenant_id,
                         profile_id=profile_id,
                         ticker=event.ticker,
+                        metric_name=event.metric_name,
                         interest_score=new_interest,
                         raw_score=new_raw,
                         score_delta=score_delta,
@@ -195,6 +211,22 @@ def main():
                         value=update_msg.model_dump_json().encode("utf-8"),
                     )
                     producer.flush(timeout=5)
+
+                    # 8. Forward enriched event via HTTP POST (fire-and-forget)
+                    if EVENT_FORWARD_URL:
+                        fwd = ScoredEventForward(
+                            event_key=event.event_key,
+                            profile_id=profile_id,
+                            ticker=event.ticker,
+                            metric_name=event.metric_name,
+                            metric_score=event.metric_score,
+                            interest_score=new_interest,
+                            raw_score=new_raw,
+                            score_delta=score_delta,
+                            created_at=event.created_at,
+                            event_data=event.event_data,
+                        )
+                        _forward_pool.submit(_forward_scored_event, fwd.model_dump_json())
 
                     EVENTS_PROCESSED.inc()
                     logger.info(
@@ -223,6 +255,7 @@ def main():
         # Commit offset after processing (success or DLQ)
         consumer.commit(asynchronous=False)
 
+    _forward_pool.shutdown(wait=True, cancel_futures=False)
     consumer.close()
     try:
         get_connection().close()
