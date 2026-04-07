@@ -309,3 +309,136 @@ async def get_top_events(
     except Exception as e:
         logger.error(f"Top Events error (baseAccountId={baseAccountId}, email={email}, profileId={profileId}): {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================
+# Metric Timestamps by Profile
+# ============================================================
+
+class MetricTimestampsItem(BaseModel):
+    profileId: str
+    timestamps: List[float] = Field(default_factory=list)
+
+
+def _resolve_profile_ids_from_account(base_account_id: str) -> List[str]:
+    """Resolve base_account_id → all profile_ids via PG portfolios table."""
+    conn = _get_pg_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT DISTINCT profile_id FROM portfolios WHERE base_account_id = %s",
+                (base_account_id.strip(),),
+            )
+            rows = cur.fetchall()
+            return [
+                (r["profile_id"] if isinstance(r, dict) else r[0])
+                for r in rows
+            ]
+    finally:
+        conn.close()
+
+
+def _resolve_profile_ids_by_email(db, email: str) -> List[str]:
+    """Resolve email → all profile _keys via ArangoDB cdp_profile."""
+    aql = """
+        FOR p IN cdp_profile
+            FILTER p.primaryEmail == @email
+            RETURN p._key
+    """
+    cursor = db.aql.execute(aql, bind_vars={"email": email.strip()})
+    return [k for k in cursor if k]
+
+
+_AQL_METRIC_TIMESTAMPS = """
+FOR event IN cdp_trackingevent
+    FILTER event.refProfileId IN @profile_ids
+    FILTER event.metricName == @metric_name
+    FILTER event.eventData.timestamp != null
+    FILTER event.eventData.timestamp >= @cutoff_ts
+
+    RETURN {
+        profileId: event.refProfileId,
+        ts: event.eventData.timestamp
+    }
+"""
+
+
+def _fetch_metric_timestamps(
+    profile_ids: List[str],
+    metric_name: str,
+) -> List[MetricTimestampsItem]:
+    db = _get_arango_db()
+    cutoff_ts = time.time() - _THREE_MONTHS_SECONDS
+
+    cursor = db.aql.execute(
+        _AQL_METRIC_TIMESTAMPS,
+        bind_vars={
+            "profile_ids": profile_ids,
+            "metric_name": metric_name,
+            "cutoff_ts": cutoff_ts,
+        },
+    )
+
+    # Group timestamps by profileId
+    groups: dict[str, list[float]] = {}
+    for row in cursor:
+        pid = row["profileId"]
+        ts = float(row.get("ts") or 0)
+        groups.setdefault(pid, []).append(ts)
+
+    # Sort timestamps DESC within each group
+    return [
+        MetricTimestampsItem(
+            profileId=pid,
+            timestamps=sorted(timestamps, reverse=True),
+        )
+        for pid, timestamps in groups.items()
+    ]
+
+
+@router.get("/metric-timestamps", response_model=List[MetricTimestampsItem])
+async def get_metric_timestamps(
+    baseAccountId: Optional[str] = Query(None, description="User base account ID"),
+    email: Optional[str] = Query(None, description="User email address"),
+    metricName: str = Query(..., description="Event metric name (e.g. 'order-created', 'ticker-view')"),
+):
+    """
+    Returns all timestamps (last 3 months) of a specific metricName,
+    grouped by profileId.  Provide exactly one of `baseAccountId` or `email`.
+    """
+    provided = sum(1 for v in [baseAccountId, email] if v)
+    if provided == 0:
+        raise HTTPException(status_code=400, detail="Exactly one of 'baseAccountId' or 'email' must be provided.")
+    if provided > 1:
+        raise HTTPException(status_code=400, detail="Only one of 'baseAccountId' or 'email' may be provided at a time.")
+
+    try:
+        lookup = baseAccountId or email
+        cache_key = f"leo:user_events:metric_ts:{lookup}:{metricName}"
+        cached = _cache_get(cache_key)
+        if cached:
+            logger.info(f"[Cache HIT] {cache_key}")
+            return [MetricTimestampsItem(**item) for item in json.loads(cached)]
+
+        logger.info(f"[Cache MISS] {cache_key}")
+
+        # Resolve to profile_ids
+        if baseAccountId:
+            profile_ids = _resolve_profile_ids_from_account(baseAccountId)
+            if not profile_ids:
+                raise HTTPException(status_code=404, detail=f"No portfolio found for baseAccountId '{baseAccountId}'.")
+        else:
+            db = _get_arango_db()
+            profile_ids = _resolve_profile_ids_by_email(db, email)
+            if not profile_ids:
+                raise HTTPException(status_code=404, detail=f"No profile found for email '{email}'.")
+
+        results = _fetch_metric_timestamps(profile_ids, metricName)
+        _cache_set(cache_key, json.dumps([r.model_dump() for r in results]))
+        return results
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Metric timestamps error (baseAccountId={baseAccountId}, email={email}, metricName={metricName}): {e}")
+        raise HTTPException(status_code=500, detail=str(e))
