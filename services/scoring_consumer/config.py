@@ -22,3 +22,6 @@ DLQ_TOPIC: str = "leo.dlq"
 MAX_RETRIES: int = 3
 
 REALTIME_SCORING_ENABLED: bool = os.getenv("REALTIME_SCORING_ENABLED", "False").lower() in ("1", "true", "yes")
+
+# External API forwarding (empty = disabled)
+EVENT_FORWARD_URL: str = os.getenv("EVENT_FORWARD_URL", "")

@@ -56,6 +56,7 @@ def transform(entry: Dict[str, Any]) -> List[CdpEventMessage]:
                 ticker=ticker,
                 metric_score=metric_score,
                 created_at=created_at,
+                event_data=event_data,
             )
         )
 

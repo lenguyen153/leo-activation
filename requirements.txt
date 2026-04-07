@@ -90,3 +90,7 @@ structlog>=24.0
 prometheus_client>=0.20
 # Prometheus metrics exposition
 # Each microservice exposes /metrics for scraping
+
+websockets>=13.0
+# WebSocket client for streaming CDC events to external services
+# Used by ws_forwarder microservice
