@@ -362,22 +362,56 @@ FOR event IN cdp_trackingevent
     }
 """
 
+_AQL_METRIC_TIMESTAMPS_WITH_INSTRUMENT = """
+FOR event IN cdp_trackingevent
+    FILTER event.refProfileId IN @profile_ids
+    FILTER event.metricName == @metric_name
+    FILTER event.eventData.timestamp != null
+    FILTER event.eventData.timestamp >= @cutoff_ts
+
+    // Check if event has any instrument field at all
+    LET has_single = event.eventData.instrument_id != null AND event.eventData.instrument_id != ""
+    LET has_list = IS_ARRAY(event.eventData.instrument_id_list) AND LENGTH(event.eventData.instrument_id_list) > 0
+    LET has_instrument = has_single OR has_list
+
+    // If event has no instrument fields → include it (pass-through)
+    // If event has instrument fields → only include if target instrument matches
+    FILTER !has_instrument
+        OR (has_single AND event.eventData.instrument_id == @instrument_id)
+        OR (has_list AND @instrument_id IN event.eventData.instrument_id_list)
+
+    RETURN {
+        profileId: event.refProfileId,
+        ts: event.eventData.timestamp
+    }
+"""
+
 
 def _fetch_metric_timestamps(
     profile_ids: List[str],
     metric_name: str,
+    instrument_id: Optional[str] = None,
 ) -> List[MetricTimestampsItem]:
     db = _get_arango_db()
     cutoff_ts = time.time() - _THREE_MONTHS_SECONDS
 
-    cursor = db.aql.execute(
-        _AQL_METRIC_TIMESTAMPS,
-        bind_vars={
+    if instrument_id:
+        query = _AQL_METRIC_TIMESTAMPS_WITH_INSTRUMENT
+        bind_vars = {
             "profile_ids": profile_ids,
             "metric_name": metric_name,
             "cutoff_ts": cutoff_ts,
-        },
-    )
+            "instrument_id": instrument_id.strip(),
+        }
+    else:
+        query = _AQL_METRIC_TIMESTAMPS
+        bind_vars = {
+            "profile_ids": profile_ids,
+            "metric_name": metric_name,
+            "cutoff_ts": cutoff_ts,
+        }
+
+    cursor = db.aql.execute(query, bind_vars=bind_vars)
 
     # Group timestamps by profileId
     groups: dict[str, list[float]] = {}
@@ -401,10 +435,13 @@ async def get_metric_timestamps(
     baseAccountId: Optional[str] = Query(None, description="User base account ID"),
     email: Optional[str] = Query(None, description="User email address"),
     metricName: str = Query(..., description="Event metric name (e.g. 'order-created', 'ticker-view')"),
+    instrumentId: Optional[str] = Query(None, description="Filter by instrument ID (optional)"),
 ):
     """
     Returns all timestamps (last 3 months) of a specific metricName,
     grouped by profileId.  Provide exactly one of `baseAccountId` or `email`.
+    If instrumentId is given, only returns events matching that instrument
+    (events without any instrument field are always included).
     """
     provided = sum(1 for v in [baseAccountId, email] if v)
     if provided == 0:
@@ -414,7 +451,7 @@ async def get_metric_timestamps(
 
     try:
         lookup = baseAccountId or email
-        cache_key = f"leo:user_events:metric_ts:{lookup}:{metricName}"
+        cache_key = f"leo:user_events:metric_ts:{lookup}:{metricName}:{instrumentId or 'all'}"
         cached = _cache_get(cache_key)
         if cached:
             logger.info(f"[Cache HIT] {cache_key}")
@@ -433,7 +470,7 @@ async def get_metric_timestamps(
             if not profile_ids:
                 raise HTTPException(status_code=404, detail=f"No profile found for email '{email}'.")
 
-        results = _fetch_metric_timestamps(profile_ids, metricName)
+        results = _fetch_metric_timestamps(profile_ids, metricName, instrumentId)
         _cache_set(cache_key, json.dumps([r.model_dump() for r in results]))
         return results
 
