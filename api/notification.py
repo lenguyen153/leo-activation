@@ -32,7 +32,7 @@ TOPIC_MAPPING: Dict[str, int] = {
 
 class NotificationRequest(BaseModel):
     """
-    Caller sends user_id + data dict.
+    Caller sends base_account_id + data dict.
     data follows the structure:
     {
       "Data": {
@@ -41,7 +41,7 @@ class NotificationRequest(BaseModel):
       }
     }
     """
-    user_id: str = Field(..., description="Username của người nhận", example="inno01")
+    base_account_id: str = Field(..., description="Base account ID of the recipient", example="999C000001")
     data: Dict[str, Any] = Field(..., description="Push data payload")
 
 
@@ -76,9 +76,9 @@ router = APIRouter(prefix="/notification", tags=["Notification"])
 @router.post("/send", status_code=200)
 async def send_notification(request: NotificationRequest):
     """
-    Nhận request nội bộ và chuyển tiếp sang adminnotify external.
-    Caller chỉ cần truyền user_id + data dict.
-    Subject, Content, TopicCode được tự động extract từ data.
+    Receive request from internal caller and forward to adminnotify external.
+    Caller only needs to pass base_account_id + data dict.
+    Subject, Content, TopicCode will be automatically extracted from the data. Caller can customize the push content by passing different data structure, as long as it contains the required fields for extraction.
     """
     data = request.data
     data_inner = data.get("Data", {})
@@ -90,7 +90,7 @@ async def send_notification(request: NotificationRequest):
 
     message: Dict[str, Any] = {
         "NotifyType": [3],
-        "SendTo": request.user_id,
+        "SendTo": request.base_account_id,
         "TopicCode": topic_code,
         "Subject": subject,
         "Content": content,
@@ -114,7 +114,7 @@ async def send_notification(request: NotificationRequest):
 
         logger.info(
             "[ADMINNOTIFY] Sent | user=%s | topic=%s | status=%s",
-            request.user_id,
+            request.base_account_id,
             topic_code,
             response.status_code,
         )
@@ -123,7 +123,7 @@ async def send_notification(request: NotificationRequest):
     except httpx.HTTPStatusError as e:
         logger.error(
             "[ADMINNOTIFY] HTTP error | user=%s | topic=%s | status=%s | body=%s",
-            request.user_id,
+            request.base_account_id,
             topic_code,
             e.response.status_code,
             e.response.text[:300],
@@ -131,5 +131,5 @@ async def send_notification(request: NotificationRequest):
         raise HTTPException(status_code=502, detail="External notification server error")
 
     except httpx.RequestError as e:
-        logger.error("[ADMINNOTIFY] Request error | user=%s | error=%s", request.user_id, e)
+        logger.error("[ADMINNOTIFY] Request error | user=%s | error=%s", request.base_account_id, e)
         raise HTTPException(status_code=503, detail="Unable to connect to external notification server")

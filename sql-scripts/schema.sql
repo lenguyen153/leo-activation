@@ -1269,7 +1269,75 @@ CREATE POLICY holdings_tenant_rls ON portfolio_holdings
     WITH CHECK (tenant_id = current_setting('app.current_tenant_id', true)::uuid);
 
 -- ============================================================
--- 24. SYSTEM BOOTSTRAP: Safely bootstrap 'master' tenant
+-- 24. CAMPAIGN ENGINE (RULE-BASED NOTIFICATION)
+-- ============================================================
+
+-- 24.1 Campaign Rules
+CREATE TABLE IF NOT EXISTS campaign_rules (
+    rule_id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id       UUID NOT NULL REFERENCES tenant(tenant_id) ON DELETE CASCADE,
+    campaign_id     VARCHAR,
+
+    rule_name       VARCHAR NOT NULL,
+    rule_description TEXT,
+    status          VARCHAR NOT NULL DEFAULT 'paused',   -- active | paused | archived
+    priority        INT DEFAULT 100,                     -- lower = higher priority
+
+    -- Rule definition (composable condition tree)
+    conditions      JSONB NOT NULL,
+    channel         VARCHAR NOT NULL,                    -- push | email | zalo | sms
+    template_id     UUID REFERENCES message_templates(template_id) ON DELETE SET NULL,
+    message_config  JSONB,                               -- fallback: {subject, body, topic_type}
+
+    -- Scheduling & frequency
+    frequency_cap   JSONB DEFAULT '{"cooldown_days": 7, "max_per_day": 1}',
+    schedule_cron   VARCHAR DEFAULT '0 * * * *',         -- 5-field cron expression
+    audience_filter JSONB,                               -- static filters: {segments, min_score}
+
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_campaign_rules_tenant_status
+    ON campaign_rules (tenant_id, status);
+CREATE INDEX IF NOT EXISTS idx_campaign_rules_priority
+    ON campaign_rules (tenant_id, priority);
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_trigger
+        WHERE tgname = 'trg_campaign_rules_updated_at'
+          AND tgrelid = 'campaign_rules'::regclass
+    ) THEN
+        CREATE TRIGGER trg_campaign_rules_updated_at
+        BEFORE UPDATE ON campaign_rules
+        FOR EACH ROW
+        EXECUTE FUNCTION update_timestamp();
+    END IF;
+END $$;
+
+-- 24.2 Engine Run Audit Log
+CREATE TABLE IF NOT EXISTS campaign_engine_runs (
+    run_id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id        UUID NOT NULL REFERENCES tenant(tenant_id) ON DELETE CASCADE,
+    started_at       TIMESTAMPTZ NOT NULL,
+    finished_at      TIMESTAMPTZ,
+
+    rules_evaluated  INT DEFAULT 0,
+    profiles_matched INT DEFAULT 0,
+    sent             INT DEFAULT 0,
+    skipped          INT DEFAULT 0,
+    errored          INT DEFAULT 0,
+    run_metadata     JSONB                               -- per-rule breakdown
+);
+
+CREATE INDEX IF NOT EXISTS idx_engine_runs_tenant_time
+    ON campaign_engine_runs (tenant_id, started_at);
+
+
+-- ============================================================
+-- 25. SYSTEM BOOTSTRAP: Safely bootstrap 'master' tenant
 -- ============================================================
 
 -- RLS-safe: temporarily disable RLS for bootstrap
