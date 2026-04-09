@@ -23,6 +23,7 @@ class ScoreUpdateMessage(BaseModel):
 
     tenant_id: str
     profile_id: str
+    base_account_id: Optional[str] = None
     ticker: str
     metric_name: str = Field(default="", description="Source metric that triggered the score update")
     interest_score: float
@@ -36,6 +37,7 @@ class ScoredEventForward(BaseModel):
 
     event_key: str
     profile_id: str
+    base_account_id: Optional[str] = None
     ticker: str
     metric_name: str
     metric_score: float

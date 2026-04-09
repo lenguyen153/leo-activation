@@ -13,8 +13,12 @@ DLQ_TOPIC: str = os.getenv("WS_FORWARDER_DLQ_TOPIC", "leo.ws-forwarder.dlq")
 # Destination WebSocket
 WS_URL: str = os.getenv(
     "WS_FORWARDER_URL",
-    "",
+    "wss://think-uat.innotech.vn/assistant/ws/event/stream",
 )
+
+# Handshake auth — server sends auth_request, we reply with this ID
+WS_AUTH_ID: str = os.getenv("WS_AUTH_ID", "cdp_innotech_2026")
+HANDSHAKE_TIMEOUT: float = float(os.getenv("WS_HANDSHAKE_TIMEOUT", "10"))
 
 # Fire-and-forget mode: send over WS and commit offset immediately (no ACK wait)
 FIRE_AND_FORGET: bool = os.getenv("WS_FIRE_AND_FORGET", "True").lower() in ("1", "true", "yes")

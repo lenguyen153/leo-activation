@@ -138,6 +138,7 @@ FOR event IN cdp_trackingevent
     FILTER event.refProfileId == @profile_id
     FILTER event.eventData.timestamp != null
     FILTER event.eventData.timestamp >= @cutoff_ts
+    FILTER @upper_ts == null OR event.eventData.timestamp <= @upper_ts
 
     LET single = event.eventData.instrument_id
     LET list   = event.eventData.instrument_id_list
@@ -163,6 +164,7 @@ FOR event IN cdp_trackingevent
     FILTER event.fingerprintId IN @fingerprints
     FILTER event.eventData.timestamp != null
     FILTER event.eventData.timestamp >= @cutoff_ts
+    FILTER @upper_ts == null OR event.eventData.timestamp <= @upper_ts
 
     LET single = event.eventData.instrument_id
     LET list   = event.eventData.instrument_id_list
@@ -227,9 +229,12 @@ def _fetch_top_events(
     email: Optional[str],
     profile_id: Optional[str],
     top_k: int,
+    from_ts: Optional[float] = None,
+    to_ts: Optional[float] = None,
 ) -> List[TopEventItem]:
     db = _get_arango_db()
-    cutoff_ts = time.time() - _THREE_MONTHS_SECONDS
+    cutoff_ts = from_ts if from_ts is not None else time.time() - _THREE_MONTHS_SECONDS
+    upper_ts = to_ts
 
     # Path 1: base_account_id → PG lookup → refProfileId in Arango
     if base_account_id:
@@ -238,7 +243,7 @@ def _fetch_top_events(
             raise HTTPException(status_code=404, detail=f"No portfolio found for baseAccountId '{base_account_id}'.")
         cursor = db.aql.execute(
             _AQL_TOP_EVENTS_BY_PROFILE,
-            bind_vars={"profile_id": resolved_pid, "priority_metrics": _PRIORITY_METRICS, "cutoff_ts": cutoff_ts},
+            bind_vars={"profile_id": resolved_pid, "priority_metrics": _PRIORITY_METRICS, "cutoff_ts": cutoff_ts, "upper_ts": upper_ts},
         )
         return _sort_and_truncate(list(cursor), top_k)
 
@@ -246,7 +251,7 @@ def _fetch_top_events(
     if profile_id:
         cursor = db.aql.execute(
             _AQL_TOP_EVENTS_BY_PROFILE,
-            bind_vars={"profile_id": profile_id.strip(), "priority_metrics": _PRIORITY_METRICS, "cutoff_ts": cutoff_ts},
+            bind_vars={"profile_id": profile_id.strip(), "priority_metrics": _PRIORITY_METRICS, "cutoff_ts": cutoff_ts, "upper_ts": upper_ts},
         )
         return _sort_and_truncate(list(cursor), top_k)
 
@@ -257,7 +262,7 @@ def _fetch_top_events(
             raise HTTPException(status_code=404, detail=f"No profile found for email '{email}'.")
         cursor = db.aql.execute(
             _AQL_TOP_EVENTS_BY_FINGERPRINT,
-            bind_vars={"fingerprints": fingerprints, "priority_metrics": _PRIORITY_METRICS, "cutoff_ts": cutoff_ts},
+            bind_vars={"fingerprints": fingerprints, "priority_metrics": _PRIORITY_METRICS, "cutoff_ts": cutoff_ts, "upper_ts": upper_ts},
         )
         return _sort_and_truncate(list(cursor), top_k)
 
@@ -306,8 +311,63 @@ async def get_top_events(
         _cache_set(cache_key, json.dumps([r.model_dump() for r in results]))
 
         return results
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Top Events error (baseAccountId={baseAccountId}, email={email}, profileId={profileId}): {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/top-range", response_model=List[TopEventItem])
+async def get_top_events_range(
+    baseAccountId: Optional[str] = Query(None, description="User base account ID (resolved via PG portfolios)"),
+    email: Optional[str] = Query(None, description="User email address"),
+    profileId: Optional[str] = Query(None, description="User profile ID"),
+    topK: int = Query(5, ge=5, le=50, description="Number of events to return (5-50)"),
+    fromTs: float = Query(..., description="Start of time range (unix timestamp)"),
+    toTs: Optional[float] = Query(None, description="End of time range (unix timestamp, defaults to now)"),
+):
+    """
+    Same as /top but filtered to events within [fromTs, toTs].
+    Provide exactly one of `baseAccountId`, `email`, or `profileId`.
+    `fromTs` cannot be more than 3 months old. `toTs` defaults to current time if omitted.
+    """
+    if toTs is None:
+        toTs = time.time()
+
+    provided = sum(1 for v in [baseAccountId, email, profileId] if v)
+    if provided == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Exactly one of 'baseAccountId', 'email', or 'profileId' must be provided.",
+        )
+    if provided > 1:
+        raise HTTPException(
+            status_code=400,
+            detail="Only one of 'baseAccountId', 'email', or 'profileId' may be provided at a time.",
+        )
+    if fromTs < time.time() - _THREE_MONTHS_SECONDS:
+        raise HTTPException(status_code=400, detail="'fromTs' cannot be more than 3 months in the past.")
+    if fromTs >= toTs:
+        raise HTTPException(status_code=400, detail="'fromTs' must be less than 'toTs'.")
+
+    try:
+        lookup = baseAccountId or profileId or email
+        cache_key = f"leo:user_events:top_range:{lookup}:{topK}:{fromTs}:{toTs}"
+        cached = _cache_get(cache_key)
+        if cached:
+            logger.info(f"[Cache HIT] {cache_key}")
+            return [TopEventItem(**item) for item in json.loads(cached)]
+
+        logger.info(f"[Cache MISS] {cache_key}")
+        results = _fetch_top_events(baseAccountId, email, profileId, topK, from_ts=fromTs, to_ts=toTs)
+
+        _cache_set(cache_key, json.dumps([r.model_dump() for r in results]))
+        return results
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Top Events Range error (baseAccountId={baseAccountId}, email={email}, profileId={profileId}): {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

@@ -31,7 +31,12 @@ def _populate_fingerprint_cache(arango_db, segment_id: Optional[str], segment_na
     import os
     cache_redis_url = os.getenv("CDC_REDIS_URL", "redis://redis:6379/2")
     try:
-        r = redis_lib.from_url(cache_redis_url, decode_responses=True)
+        r = redis_lib.from_url(
+            cache_redis_url,
+            decode_responses=True,
+            socket_timeout=5,
+            socket_connect_timeout=5,
+        )
 
         # Build the appropriate AQL filter depending on what's available
         if segment_id:

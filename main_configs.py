@@ -206,3 +206,26 @@ class MarketingConfigs:
     # --------------------------------------------------------
     ADMINNOTIFY_BASE_URL: str = os.getenv("ADMINNOTIFY_BASE_URL", "https://your-core-system.com")
     ADMINNOTIFY_ENDPOINT: str = os.getenv("ADMINNOTIFY_ENDPOINT", "/fo/api/adminnotify")
+
+
+# ============================================================
+# Campaign Engine Configuration
+# ============================================================
+class CampaignEngineConfigs:
+    """Settings for the Rule-Based Notification Campaign Engine."""
+
+    ENABLED: bool = os.getenv("CAMPAIGN_ENGINE_ENABLED", "False").lower() in ("1", "true", "yes")
+
+    # Batch processing
+    BATCH_SIZE: int = int(os.getenv("CAMPAIGN_ENGINE_BATCH_SIZE", "500"))
+
+    # Global frequency caps (per user, overridable per-rule)
+    MAX_NOTIFICATIONS_PER_DAY: int = int(os.getenv("CAMPAIGN_MAX_NOTIF_PER_DAY", "3"))
+    MIN_COOLDOWN_HOURS: int = int(os.getenv("CAMPAIGN_MIN_COOLDOWN_HOURS", "4"))
+
+    # Circuit breaker
+    CIRCUIT_BREAKER_THRESHOLD: int = int(os.getenv("CAMPAIGN_CB_THRESHOLD", "5"))
+    CIRCUIT_BREAKER_RECOVERY_S: int = int(os.getenv("CAMPAIGN_CB_RECOVERY_S", "60"))
+
+    # Retry
+    MAX_DELIVERY_RETRIES: int = int(os.getenv("CAMPAIGN_MAX_RETRIES", "3"))

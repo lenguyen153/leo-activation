@@ -5,5 +5,6 @@ from .dbo_campaign import Campaign, MarketingEvent, ActivationExperiment
 from .dbo_segment import SegmentSnapshot, SegmentSnapshotMember
 from .dbo_alert import Instrument, MarketSnapshot, AlertRule, NewsFeed, AlertSourceEnum, AlertStatusEnum
 from .dbo_execution import AgentTask, DeliveryLog, ActivationOutcome, MessageTemplate, EmbeddingJob
+from .dbo_campaign_rule import CampaignRule, CampaignEngineRun
 from .dbo_behavioral import BehavioralEvent
 from .dbo_integration import DataSource
