@@ -30,10 +30,12 @@ from services.ws_forwarder.config import (
     CONSUMER_GROUP,
     DLQ_TOPIC,
     FIRE_AND_FORGET,
+    HANDSHAKE_TIMEOUT,
     INPUT_TOPIC,
     KAFKA_BOOTSTRAP_SERVERS,
     MAX_DLQ_RETRIES,
     MAX_SEND_RETRIES,
+    WS_AUTH_ID,
     WS_PING_INTERVAL,
     WS_PING_TIMEOUT,
     WS_URL,
@@ -139,11 +141,13 @@ def _send_to_dlq(producer: Producer, raw_value: bytes, error: str) -> None:
 # WebSocket connection manager
 # ---------------------------------------------------------------------------
 async def _connect_ws() -> websockets.ClientConnection:
-    """Open a persistent WS connection with ping/pong keep-alive.
+    """Open a persistent WS connection, then complete the auth handshake.
 
-    The `ping_interval` / `ping_timeout` params instruct the websockets lib
-    to send periodic Ping frames and expect Pong responses — this keeps the
-    connection alive through enterprise proxies and firewalls.
+    Handshake protocol:
+      1. Connect to WSS endpoint
+      2. Wait for server to send auth_request
+      3. Reply with {"id": "<WS_AUTH_ID>"}
+      4. Wait for {"status": "accepted"}
     """
     ws = await websockets.connect(
         WS_URL,
@@ -151,7 +155,27 @@ async def _connect_ws() -> websockets.ClientConnection:
         ping_timeout=WS_PING_TIMEOUT,
         close_timeout=5,
     )
-    logger.info("ws_connected", url=WS_URL)
+    logger.info("ws_tcp_connected", url=WS_URL)
+
+    # Step 1: wait for auth_request from server
+    raw = await asyncio.wait_for(ws.recv(), timeout=HANDSHAKE_TIMEOUT)
+    auth_req = json.loads(raw) if isinstance(raw, str) else json.loads(raw.decode())
+    logger.info("ws_auth_request_received", message=auth_req)
+
+    # Step 2: send our client ID
+    await ws.send(json.dumps({"id": WS_AUTH_ID}))
+    logger.info("ws_auth_id_sent", auth_id=WS_AUTH_ID)
+
+    # Step 3: wait for accepted
+    raw = await asyncio.wait_for(ws.recv(), timeout=HANDSHAKE_TIMEOUT)
+    auth_resp = json.loads(raw) if isinstance(raw, str) else json.loads(raw.decode())
+    logger.info("ws_auth_response", message=auth_resp)
+
+    if auth_resp.get("status") != "accepted":
+        await ws.close()
+        raise ConnectionError(f"Auth rejected: {auth_resp}")
+
+    logger.info("ws_handshake_complete", url=WS_URL)
     return ws
 
 

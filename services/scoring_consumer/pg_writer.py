@@ -128,3 +128,14 @@ def validate_profile(conn, profile_id: str) -> bool:
     with conn.cursor() as cur:
         cur.execute("SELECT 1 FROM cdp_profiles WHERE profile_id = %s LIMIT 1", (profile_id,))
         return cur.fetchone() is not None
+
+
+def fetch_base_account_id(conn, profile_id: str) -> str | None:
+    """Resolve profile_id → base_account_id via the portfolios table."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT base_account_id FROM portfolios WHERE profile_id = %s LIMIT 1",
+            (profile_id,),
+        )
+        row = cur.fetchone()
+        return row["base_account_id"] if row else None
