@@ -8,6 +8,10 @@ services:
       - "127.0.0.1:8000:8000"
     env_file:
       - .env
+    environment:
+      - ARANGO_HOST=${ARANGO_HOST}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       - redis
     restart: unless-stopped
@@ -153,7 +157,8 @@ services:
     env_file: .env
     environment:
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
-      - WS_FORWARDER_URL=${WS_FORWARDER_URL:-}
+      - WS_FORWARDER_URL=${WS_FORWARDER_URL:-wss://think-uat.innotech.vn/assistant/ws/event/stream}
+      - WS_CLIENT_ID=${WS_CLIENT_ID:-cdp_innotech_2026}
       - WS_FORWARDER_INPUT_TOPIC=${WS_FORWARDER_INPUT_TOPIC:-leo.score.updates}
     extra_hosts:
       - "host.docker.internal:host-gateway"
