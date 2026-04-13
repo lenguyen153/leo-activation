@@ -26,3 +26,6 @@ exec uvicorn main:app \
   --log-level info \
   --proxy-headers \
   --forwarded-allow-ips="*"
+
+
+cd /build/prod-app && docker run --rm --env-file .env --network prod-app_default registry.innotech.vn/cdp-ai/c720-data-activation/core:latest bash shell-scripts/run_campaign_engine.sh

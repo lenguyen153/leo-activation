@@ -29,13 +29,12 @@ from services.ws_forwarder.config import (
     BACKOFF_MAX,
     CONSUMER_GROUP,
     DLQ_TOPIC,
-    FIRE_AND_FORGET,
-    HANDSHAKE_TIMEOUT,
     INPUT_TOPIC,
     KAFKA_BOOTSTRAP_SERVERS,
     MAX_DLQ_RETRIES,
     MAX_SEND_RETRIES,
-    WS_AUTH_ID,
+    WS_CLIENT_ID,
+    WS_HANDSHAKE_TIMEOUT,
     WS_PING_INTERVAL,
     WS_PING_TIMEOUT,
     WS_URL,
@@ -141,13 +140,14 @@ def _send_to_dlq(producer: Producer, raw_value: bytes, error: str) -> None:
 # WebSocket connection manager
 # ---------------------------------------------------------------------------
 async def _connect_ws() -> websockets.ClientConnection:
-    """Open a persistent WS connection, then complete the auth handshake.
+    """Open a persistent WS connection, complete the auth handshake, and
+    enable ping/pong keep-alive.
 
     Handshake protocol:
-      1. Connect to WSS endpoint
-      2. Wait for server to send auth_request
-      3. Reply with {"id": "<WS_AUTH_ID>"}
-      4. Wait for {"status": "accepted"}
+      1. Connect to the WS endpoint.
+      2. Server sends an auth_request message.
+      3. We respond with {"id": "<WS_CLIENT_ID>"}.
+      4. Server sends {"status": "accepted"}.
     """
     ws = await websockets.connect(
         WS_URL,
@@ -157,25 +157,22 @@ async def _connect_ws() -> websockets.ClientConnection:
     )
     logger.info("ws_tcp_connected", url=WS_URL)
 
-    # Step 1: wait for auth_request from server
-    raw = await asyncio.wait_for(ws.recv(), timeout=HANDSHAKE_TIMEOUT)
-    auth_req = json.loads(raw) if isinstance(raw, str) else json.loads(raw.decode())
-    logger.info("ws_auth_request_received", message=auth_req)
+    # --- Step 1: wait for auth_request from server ---
+    raw = await asyncio.wait_for(ws.recv(), timeout=WS_HANDSHAKE_TIMEOUT)
+    logger.info("ws_handshake_received", message=raw[:200] if isinstance(raw, str) else str(raw)[:200])
 
-    # Step 2: send our client ID
-    await ws.send(json.dumps({"id": WS_AUTH_ID}))
-    logger.info("ws_auth_id_sent", auth_id=WS_AUTH_ID)
+    # --- Step 2: send our client identity ---
+    await ws.send(json.dumps({"id": WS_CLIENT_ID}))
+    logger.info("ws_handshake_sent_id", client_id=WS_CLIENT_ID)
 
-    # Step 3: wait for accepted
-    raw = await asyncio.wait_for(ws.recv(), timeout=HANDSHAKE_TIMEOUT)
-    auth_resp = json.loads(raw) if isinstance(raw, str) else json.loads(raw.decode())
-    logger.info("ws_auth_response", message=auth_resp)
-
-    if auth_resp.get("status") != "accepted":
+    # --- Step 3: wait for accepted ---
+    raw = await asyncio.wait_for(ws.recv(), timeout=WS_HANDSHAKE_TIMEOUT)
+    resp = json.loads(raw)
+    if resp.get("status") != "accepted":
         await ws.close()
-        raise ConnectionError(f"Auth rejected: {auth_resp}")
+        raise ConnectionError(f"Handshake rejected: {resp}")
 
-    logger.info("ws_handshake_complete", url=WS_URL)
+    logger.info("ws_handshake_accepted")
     return ws
 
 
@@ -220,6 +217,7 @@ async def _send_and_wait_ack(
         "data": payload,
         "sent_at": datetime.now(timezone.utc).isoformat(),
     }
+    logger.info("ws_sending", event_id=event_id, payload=payload)
     await ws.send(json.dumps(envelope))
 
     # Wait for the server's JSON response acknowledging *this* event_id.
@@ -238,8 +236,11 @@ async def _send_and_wait_ack(
             logger.debug("ws_non_json_response", raw=raw_resp[:200])
             continue
 
-        # Match on event_id so we don't confuse interleaved responses
-        if resp.get("event_id") == event_id:
+        # The server acks sequentially without echoing event_id, so any
+        # response carrying a `status` field is the ack for the most
+        # recent send. Ignore heartbeats / server-pushed messages that
+        # lack a status field.
+        if "status" in resp:
             return resp
 
 
@@ -295,82 +296,73 @@ async def _run() -> None:
         payload = scrub_pii(payload)
 
         # ---------------------------------------------------------------
-        # 3. Send to WebSocket
+        # 3. Send-and-Wait with retries
+        #    Offset is committed ONLY after a successful ACK.
         # ---------------------------------------------------------------
-        if FIRE_AND_FORGET:
-            # Fire-and-forget: send and commit immediately, no ACK wait
+        send_attempts = 0
+        committed = False
+
+        while send_attempts < MAX_SEND_RETRIES and not _shutdown_event.is_set():
+            send_attempts += 1
             try:
-                envelope = json.dumps({
-                    "event_id": event_id,
-                    "data": payload,
-                    "sent_at": datetime.now(timezone.utc).isoformat(),
-                })
-                await ws.send(envelope)
-                await loop.run_in_executor(
-                    None, lambda: consumer.commit(asynchronous=False),
-                )
-                EVENTS_FORWARDED.inc()
-                logger.info("sent", event_id=event_id, mode="fire_and_forget", payload=payload)
+                with FORWARD_LATENCY.time():
+                    resp = await _send_and_wait_ack(ws, event_id, payload)
+
+                status = resp.get("status", "").lower()
+
+                if status == "ok":
+                    # --- Happy path: ACK received, safe to commit offset ---
+                    await loop.run_in_executor(
+                        None, lambda: consumer.commit(asynchronous=False),
+                    )
+                    committed = True
+                    EVENTS_FORWARDED.inc()
+                    logger.info("ack_received", event_id=event_id)
+                    break
+
+                elif status == "error" and resp.get("error_type") == "malformed_payload":
+                    # --- Server says our payload is bad — DLQ, commit, move on ---
+                    await loop.run_in_executor(
+                        None,
+                        _send_to_dlq,
+                        producer,
+                        raw_value,
+                        f"Server rejected payload: {resp.get('message', '')}",
+                    )
+                    await loop.run_in_executor(
+                        None, lambda: consumer.commit(asynchronous=False),
+                    )
+                    committed = True
+                    break
+
+                else:
+                    # Unexpected status — treat as transient, retry
+                    logger.warning("ws_unexpected_response", event_id=event_id, attempt=send_attempts, max=MAX_SEND_RETRIES, response=resp)
+
+            except asyncio.TimeoutError:
+                # No ACK within deadline — retry the same uncommitted message
+                logger.warning("ack_timeout", event_id=event_id, attempt=send_attempts, max=MAX_SEND_RETRIES)
 
             except websockets.ConnectionClosed as exc:
-                # Connection lost — reconnect and retry this message
+                # Connection lost — pause consumption, reconnect, then retry
                 logger.warning("ws_connection_lost", error=str(exc))
                 ws = await _connect_with_backoff()
-                # Do NOT commit — message will be resent on next loop iteration
-                continue
+                # Do NOT commit — the message will be resent after reconnect
 
-        else:
-            # Send-and-Wait: commit only after server ACKs the event_id
-            send_attempts = 0
-            committed = False
-
-            while send_attempts < MAX_SEND_RETRIES and not _shutdown_event.is_set():
-                send_attempts += 1
-                try:
-                    with FORWARD_LATENCY.time():
-                        resp = await _send_and_wait_ack(ws, event_id, payload)
-
-                    status = resp.get("status", "").lower()
-
-                    if status == "ok":
-                        await loop.run_in_executor(
-                            None, lambda: consumer.commit(asynchronous=False),
-                        )
-                        committed = True
-                        EVENTS_FORWARDED.inc()
-                        logger.info("ack_received", event_id=event_id)
-                        break
-
-                    elif status == "error" and resp.get("error_type") == "malformed_payload":
-                        await loop.run_in_executor(
-                            None, _send_to_dlq, producer, raw_value,
-                            f"Server rejected payload: {resp.get('message', '')}",
-                        )
-                        await loop.run_in_executor(
-                            None, lambda: consumer.commit(asynchronous=False),
-                        )
-                        committed = True
-                        break
-
-                    else:
-                        logger.warning("ws_unexpected_response", event_id=event_id, attempt=send_attempts, max=MAX_SEND_RETRIES, response=resp)
-
-                except asyncio.TimeoutError:
-                    logger.warning("ack_timeout", event_id=event_id, attempt=send_attempts, max=MAX_SEND_RETRIES)
-
-                except websockets.ConnectionClosed as exc:
-                    logger.warning("ws_connection_lost", error=str(exc))
-                    ws = await _connect_with_backoff()
-
-            if not committed and not _shutdown_event.is_set():
-                logger.error("retries_exhausted_routing_to_dlq", event_id=event_id, max_retries=MAX_SEND_RETRIES)
-                await loop.run_in_executor(
-                    None, _send_to_dlq, producer, raw_value,
-                    f"Exhausted {MAX_SEND_RETRIES} send retries",
-                )
-                await loop.run_in_executor(
-                    None, lambda: consumer.commit(asynchronous=False),
-                )
+        # If we exhausted retries without committing, DLQ the message so the
+        # consumer is not stuck forever on one bad message.
+        if not committed and not _shutdown_event.is_set():
+            logger.error("retries_exhausted_routing_to_dlq", event_id=event_id, max_retries=MAX_SEND_RETRIES)
+            await loop.run_in_executor(
+                None,
+                _send_to_dlq,
+                producer,
+                raw_value,
+                f"Exhausted {MAX_SEND_RETRIES} send retries",
+            )
+            await loop.run_in_executor(
+                None, lambda: consumer.commit(asynchronous=False),
+            )
 
     # -------------------------------------------------------------------
     # Graceful shutdown

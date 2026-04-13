@@ -194,11 +194,9 @@ def main():
                     # 6. Upsert to PG
                     upsert_score(conn, tenant_id, profile_id, event.ticker, new_raw, new_interest, last_event_time)
 
-                    # 7. Resolve base_account_id (nullable)
-                    base_account_id = fetch_base_account_id(conn, profile_id)
-
-                    # 8. Publish ScoreUpdateMessage
+                    # 7. Publish ScoreUpdateMessage
                     score_delta = new_interest - prev_interest
+                    base_account_id = fetch_base_account_id(conn, profile_id)
                     update_msg = ScoreUpdateMessage(
                         tenant_id=tenant_id,
                         profile_id=profile_id,
@@ -213,16 +211,15 @@ def main():
                     producer.produce(
                         topic=OUTPUT_TOPIC,
                         key=f"{profile_id}:{event.ticker}".encode("utf-8"),
-                        value=update_msg.model_dump_json(exclude_none=False).encode("utf-8"),
+                        value=update_msg.model_dump_json().encode("utf-8"),
                     )
                     producer.flush(timeout=5)
 
-                    # 9. Forward enriched event via HTTP POST (fire-and-forget)
+                    # 8. Forward enriched event via HTTP POST (fire-and-forget)
                     if EVENT_FORWARD_URL:
                         fwd = ScoredEventForward(
                             event_key=event.event_key,
                             profile_id=profile_id,
-                            base_account_id=base_account_id,
                             ticker=event.ticker,
                             metric_name=event.metric_name,
                             metric_score=event.metric_score,

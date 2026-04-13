@@ -6,6 +6,8 @@ from typing import Any, Dict
 # Everything else is left for the batch reconciliation cronjob.
 CDC_METRIC_NAMES = frozenset({
     "ticker-view",
+    "ticker-pin",
+    "ticker-unpin",
     "watchlist-add",
     "order-created",
     "order-preview",
