@@ -1,6 +1,7 @@
 """
 Temporary sync: extract portfolio + holdings data from front-end
-behavioral events (asset-detail-view) in ArangoDB and upsert into PostgreSQL.
+behavioral events (any event carrying `account_no`) in ArangoDB and upsert
+into PostgreSQL.
 
 Runs as a standalone script OR via Celery beat.
 Will be retired once the CDC pipeline is restored.
@@ -35,7 +36,44 @@ ACCOUNT_TYPE_MAP = {
 CUTOFF_DAYS = 30
 
 # --------------------------------------------------
-# AQL Query — latest asset-detail-view per account
+# AQL Query — profile_id → account_no (base) lookup from any event carrying account_no
+# --------------------------------------------------
+
+AQL_ACCOUNT_NO_LOOKUP = """
+FOR event IN cdp_trackingevent
+    FILTER event.createdAt >= @cutoff
+    FILTER HAS(event.eventData, "account_no")
+    FILTER event.eventData.account_no != null
+    FILTER event.eventData.account_no != ""
+
+    LET ref_id = (
+        event.refProfileId != null AND event.refProfileId != ""
+        ? event.refProfileId
+        : event.fingerprintId
+    )
+    FILTER ref_id != null
+
+    COLLECT
+        profile_id = ref_id
+    INTO grp
+
+    LET latest = FIRST(
+        FOR g IN grp
+            SORT g.event.createdAt DESC
+            LIMIT 1
+            RETURN g.event
+    )
+
+    RETURN {
+        profile_id:       profile_id,
+        base_account_id:  latest.eventData.account_no,
+        last_seen:        latest.createdAt
+    }
+"""
+
+# --------------------------------------------------
+# AQL Query — latest asset-detail-view per (current_account_id, profile)
+# Provides specific account_id (with suffix) + financial property fields.
 # --------------------------------------------------
 
 AQL_ASSET_DETAIL_VIEWS = """
@@ -74,48 +112,6 @@ FOR event IN cdp_trackingevent
         rtt:              latest.RTT,
         holdings:         latest.holdings,
         asset_allocation: latest.asset_allocation,
-        last_seen:        grp[0].event.createdAt
-    }
-"""
-
-# --------------------------------------------------
-# AQL Query — latest login-success per account
-# --------------------------------------------------
-
-AQL_LOGIN_SUCCESS = """
-FOR event IN cdp_trackingevent
-    FILTER event.metricName == "login-success"
-    FILTER event.createdAt >= @cutoff
-    FILTER HAS(event.eventData, "account_id")
-    FILTER event.eventData.account_id != null
-    FILTER event.eventData.account_id != ""
-
-    LET ref_id = (
-        event.refProfileId != null AND event.refProfileId != ""
-        ? event.refProfileId
-        : event.fingerprintId
-    )
-    FILTER ref_id != null
-
-    SORT event.createdAt DESC
-
-    COLLECT
-        account_id = event.eventData.account_id,
-        profile_id = ref_id
-    INTO grp
-
-    RETURN {
-        account_id:       account_id,
-        profile_id:       profile_id,
-        nav:              null,
-        cash_total:       null,
-        debt_total:       null,
-        collaterals:      null,
-        margin_limit:     null,
-        pnl:              null,
-        rtt:              null,
-        holdings:         null,
-        asset_allocation: null,
         last_seen:        grp[0].event.createdAt
     }
 """
@@ -161,30 +157,30 @@ WHERE portfolio_holdings.source_timestamp IS NULL
    OR EXCLUDED.source_timestamp > portfolio_holdings.source_timestamp;
 """
 
+UPDATE_PROFILE_EXT_DATA_SQL = """
+UPDATE cdp_profiles
+SET ext_data = COALESCE(ext_data, '{}'::jsonb)
+             || jsonb_build_object('base_account_id', %s::text)
+WHERE profile_id = %s;
+"""
+
 # --------------------------------------------------
 # Transform helpers
 # --------------------------------------------------
 
 
-def parse_account_id(raw_account_id: str) -> dict:
+def parse_account_suffix(raw_account_id: str) -> dict:
     """
-    Parse account_id into components.
-    Last character is the suffix; everything before is the base.
-    e.g. "999C0000171" → base="999C000017", suffix="1", type="CASH"
+    Extract suffix + account_type from the trailing character of a specific
+    account_id (e.g. "999C0000171" → suffix="1", type="CASH").
+    Does NOT derive base_account_id — that now comes from the account_no field.
     """
     raw = str(raw_account_id).strip()
     if len(raw) < 2:
-        return {
-            "account_id": raw,
-            "base_account_id": raw,
-            "account_suffix": "0",
-            "account_type": "UNKNOWN",
-        }
+        return {"account_id": raw, "account_suffix": "0", "account_type": "UNKNOWN"}
     suffix = raw[-1]
-    base = raw[:-1]
     return {
         "account_id": raw,
-        "base_account_id": base,
         "account_suffix": suffix,
         "account_type": ACCOUNT_TYPE_MAP.get(suffix, "UNKNOWN"),
     }
@@ -265,8 +261,12 @@ def parse_asset_allocation(alloc_raw) -> dict:
 # --------------------------------------------------
 
 
-def _build_portfolio_rows(events, tenant_id, valid_pids):
-    """One row per account_id. AQL already sorted DESC, first seen = latest."""
+def _build_portfolio_rows(events, tenant_id, valid_pids, base_by_pid):
+    """
+    One row per specific account_id (from asset-detail-view).
+    base_account_id is looked up from base_by_pid (sourced from account_no events).
+    AQL already sorted DESC, first seen = latest.
+    """
     seen = {}
     for evt in events:
         pid = evt.get("profile_id")
@@ -277,13 +277,17 @@ def _build_portfolio_rows(events, tenant_id, valid_pids):
         if aid in seen:
             continue
 
-        parsed = parse_account_id(aid)
+        base_account_id = base_by_pid.get(pid)
+        if not base_account_id:
+            continue  # no account_no mapping known for this profile
+
+        parsed = parse_account_suffix(aid)
         alloc = parse_asset_allocation(evt.get("asset_allocation"))
 
         seen[aid] = (
             tenant_id,
             parsed["account_id"],
-            parsed["base_account_id"],
+            base_account_id,
             parsed["account_type"],
             parsed["account_suffix"],
             pid,
@@ -349,6 +353,16 @@ def _upsert_holdings(conn, rows: list) -> int:
     return len(rows)
 
 
+def _update_profile_base_account_ids(conn, base_by_pid: dict, valid_pids: set) -> int:
+    """Write {base_account_id: <id>} into cdp_profiles.ext_data jsonb."""
+    rows = [(base, pid) for pid, base in base_by_pid.items() if pid in valid_pids]
+    if not rows:
+        return 0
+    with conn.cursor() as cur:
+        cur.executemany(UPDATE_PROFILE_EXT_DATA_SQL, rows)
+    return len(rows)
+
+
 # --------------------------------------------------
 # Core orchestrator
 # --------------------------------------------------
@@ -360,8 +374,12 @@ def sync_active_users_portfolios(
     segment_name: Optional[str] = None,
 ) -> dict:
     """
-    Extract portfolio data from ArangoDB asset-detail-view events and upsert into PG.
-    Returns {"portfolios": int, "holdings": int, "skipped": int}.
+    Sync flow:
+      - Any event carrying `account_no` → maps profile_id to base_account_id;
+        written to both cdp_profiles.ext_data and portfolios.base_account_id.
+      - asset-detail-view events → upsert portfolios row with specific account_id
+        (current_account_id) and financial property fields.
+    Returns {"portfolios", "holdings", "profiles_updated", "skipped"}.
     """
     tenant_name = tenant_name or os.getenv("TARGET_TENANT", "master")
     segment_name = segment_name or os.getenv("TARGET_SEGMENT", "Active in last 3 months")
@@ -378,21 +396,27 @@ def sync_active_users_portfolios(
         cutoff = (datetime.now(timezone.utc) - timedelta(days=CUTOFF_DAYS)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
         db = settings.get_arango_db()
 
-        login_events = list(db.aql.execute(AQL_LOGIN_SUCCESS, bind_vars={"cutoff": cutoff}))
-        logger.info("Fetched %d login-success rows from ArangoDB", len(login_events))
+        account_no_rows = list(db.aql.execute(AQL_ACCOUNT_NO_LOOKUP, bind_vars={"cutoff": cutoff}))
+        logger.info("Fetched %d account_no lookup rows from ArangoDB", len(account_no_rows))
 
         detail_events = list(db.aql.execute(AQL_ASSET_DETAIL_VIEWS, bind_vars={"cutoff": cutoff}))
         logger.info("Fetched %d asset-detail-view rows from ArangoDB", len(detail_events))
 
-        # login-success first (priority), then asset-detail-view as fallback
-        events = login_events + detail_events
-
-        if not events:
+        if not account_no_rows and not detail_events:
             logger.info("No events found. Nothing to sync.")
-            return {"portfolios": 0, "holdings": 0, "skipped": 0}
+            return {"portfolios": 0, "holdings": 0, "profiles_updated": 0, "skipped": 0}
+
+        base_by_pid = {
+            r["profile_id"]: r["base_account_id"]
+            for r in account_no_rows
+            if r.get("profile_id") and r.get("base_account_id")
+        }
 
         # 3. Filter — orphan isolation against PG cdp_profiles
-        all_profile_ids = list({e["profile_id"] for e in events if e.get("profile_id")})
+        all_profile_ids = list(
+            {r["profile_id"] for r in account_no_rows if r.get("profile_id")}
+            | {e["profile_id"] for e in detail_events if e.get("profile_id")}
+        )
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT profile_id FROM cdp_profiles WHERE profile_id = ANY(%s)",
@@ -404,18 +428,29 @@ def sync_active_users_portfolios(
         if skipped:
             logger.warning("Skipping %d orphaned profile(s) not in cdp_profiles", skipped)
 
-        # 4. Transform + Load portfolios (one row per account_id)
-        portfolio_rows = _build_portfolio_rows(events, tenant_id, valid_pids)
+        # 4. Write base_account_id into cdp_profiles.ext_data
+        profiles_updated = _update_profile_base_account_ids(conn, base_by_pid, valid_pids)
+
+        # 5. Transform + Load portfolios (one row per specific account_id)
+        portfolio_rows = _build_portfolio_rows(detail_events, tenant_id, valid_pids, base_by_pid)
         p_count = _upsert_portfolios(conn, portfolio_rows)
 
-        # 5. Transform + Load holdings (FK-safe: only accounts from step 4)
+        # 6. Transform + Load holdings (FK-safe: only accounts from step 5)
         valid_account_ids = {row[1] for row in portfolio_rows}
-        holding_rows = _build_holding_rows(events, tenant_id, valid_pids, valid_account_ids)
+        holding_rows = _build_holding_rows(detail_events, tenant_id, valid_pids, valid_account_ids)
         h_count = _upsert_holdings(conn, holding_rows)
 
         conn.commit()
-        logger.info("Sync complete: %d portfolios, %d holdings upserted", p_count, h_count)
-        return {"portfolios": p_count, "holdings": h_count, "skipped": skipped}
+        logger.info(
+            "Sync complete: %d portfolios, %d holdings, %d profiles updated",
+            p_count, h_count, profiles_updated,
+        )
+        return {
+            "portfolios": p_count,
+            "holdings": h_count,
+            "profiles_updated": profiles_updated,
+            "skipped": skipped,
+        }
 
     except Exception as exc:
         conn.rollback()
