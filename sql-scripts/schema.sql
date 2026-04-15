@@ -524,6 +524,11 @@ CREATE TABLE IF NOT EXISTS instruments (
     CONSTRAINT uq_instrument_symbol UNIQUE (tenant_id, symbol)
 );
 
+-- Covering index for hot-path ticker-universe scan
+-- (poll_market_snapshot.py: SELECT DISTINCT symbol ORDER BY symbol)
+CREATE INDEX IF NOT EXISTS idx_instruments_symbol
+    ON instruments (symbol);
+
 -- 8.2 Real-time Market Snapshot
 -- High-write throughput table.
 CREATE TABLE IF NOT EXISTS market_snapshot (
@@ -1317,7 +1322,34 @@ BEGIN
     END IF;
 END $$;
 
--- 24.2 Engine Run Audit Log
+-- 24.2 Market Snapshot (current state, updated every 15 min)
+CREATE TABLE IF NOT EXISTS market_snapshot (
+    symbol                   VARCHAR(20) NOT NULL PRIMARY KEY,
+    price                    NUMERIC(18,5),
+    change_percent_24h       NUMERIC(8,3),
+    current_volume           BIGINT,
+    avg_30d_volume           BIGINT,
+    is_volume_spike          BOOLEAN,
+    platform_trending_score  NUMERIC(8,3),
+    last_updated             TIMESTAMPTZ DEFAULT now()
+);
+
+-- 24.3 Market Snapshot History (append-only; used to look up price at view-time
+--      and to compute avg_30d_volume / is_volume_spike)
+CREATE TABLE IF NOT EXISTS market_snapshot_history (
+    symbol              VARCHAR(20) NOT NULL,
+    price               NUMERIC(18,5),
+    change_percent_24h  NUMERIC(8,3),
+    current_volume      BIGINT,
+    snapshot_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (symbol, snapshot_at)
+);
+
+CREATE INDEX IF NOT EXISTS idx_mkt_hist_symbol_time
+    ON market_snapshot_history (symbol, snapshot_at DESC);
+
+
+-- 24.4 Engine Run Audit Log
 CREATE TABLE IF NOT EXISTS campaign_engine_runs (
     run_id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id        UUID NOT NULL REFERENCES tenant(tenant_id) ON DELETE CASCADE,

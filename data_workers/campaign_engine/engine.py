@@ -125,6 +125,119 @@ def _build_audience_query(rule: dict) -> tuple[str, dict]:
     return sql, params
 
 
+def _drill_down(obj: dict | None, path: str) -> list:
+    """Walk a dotted path (e.g. 'ext_data.abandoned_tickers') and return list or []."""
+    if not obj:
+        return []
+    cur = obj
+    for part in path.split("."):
+        if isinstance(cur, dict):
+            cur = cur.get(part)
+        else:
+            return []
+    return cur if isinstance(cur, list) else []
+
+
+def _render_item_message(message_config: dict, item: dict) -> dict:
+    """Apply .format(**item) to title/body/subject strings (for iterate_field rules)."""
+    rendered = dict(message_config)
+    for k in ("title", "body", "subject"):
+        v = rendered.get(k)
+        if isinstance(v, str):
+            try:
+                rendered[k] = v.format(**item)
+            except (KeyError, IndexError, ValueError) as e:
+                logger.warning("[Engine] Template var missing in %s: %s", k, e)
+    return rendered
+
+
+def _dispatch_for_profile(
+    conn, redis_client, rule_id, rule_name, channel, profile,
+    message_config, template_row, freq_cap, tenant_id, today_str, stats,
+) -> None:
+    """Single-shot dispatch (non-iterate rules)."""
+    profile_id = profile["profile_id"]
+
+    if redis_client and not check_frequency_cap(redis_client, rule_id, profile_id, freq_cap):
+        stats["skipped"] += 1
+        return
+
+    if redis_client and not is_channel_available(redis_client, channel):
+        stats["skipped"] += 1
+        return
+
+    delivery_status, response = dispatch_message(
+        channel=channel, profile=profile, message_config=message_config,
+        conn=conn, rule_id=rule_id, template_row=template_row,
+    )
+    log_delivery(conn, tenant_id, rule_id, profile_id, channel,
+                 delivery_status.value, response, today_str)
+
+    if delivery_status == DeliveryStatus.SENT:
+        if redis_client:
+            record_send(redis_client, rule_id, profile_id, freq_cap)
+            record_success(redis_client, channel)
+        stats["sent"] += 1
+    elif delivery_status == DeliveryStatus.RETRY:
+        if redis_client:
+            record_failure(redis_client, channel)
+        stats["errored"] += 1
+    else:
+        stats["skipped"] += 1
+
+
+def _dispatch_iterate_for_profile(
+    conn, redis_client, rule_id, rule_name, channel, profile,
+    message_config, template_row, freq_cap, tenant_id, today_str,
+    iterate_path, sub_key_field, stats,
+) -> None:
+    """Multi-shot dispatch — one send per item in the iterate_field list."""
+    profile_id = profile["profile_id"]
+    items = _drill_down(profile, iterate_path)
+    if not items:
+        stats["skipped"] += 1
+        return
+
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        sub_key = str(item.get(sub_key_field, ""))
+
+        if redis_client and not check_frequency_cap(
+            redis_client, rule_id, profile_id, freq_cap, sub_key=sub_key
+        ):
+            stats["skipped"] += 1
+            continue
+
+        if redis_client and not is_channel_available(redis_client, channel):
+            stats["skipped"] += 1
+            continue
+
+        rendered_config = _render_item_message(message_config, item)
+
+        delivery_status, response = dispatch_message(
+            channel=channel, profile=profile, message_config=rendered_config,
+            conn=conn, rule_id=rule_id, template_row=template_row,
+        )
+        # Tag delivery log with sub_key so per-ticker history is queryable.
+        log_delivery(
+            conn, tenant_id, f"{rule_id}:{sub_key}", profile_id, channel,
+            delivery_status.value, response, today_str,
+        )
+
+        if delivery_status == DeliveryStatus.SENT:
+            if redis_client:
+                record_send(redis_client, rule_id, profile_id, freq_cap, sub_key=sub_key)
+                record_success(redis_client, channel)
+            stats["sent"] += 1
+        elif delivery_status == DeliveryStatus.RETRY:
+            if redis_client:
+                record_failure(redis_client, channel)
+            stats["errored"] += 1
+        else:
+            stats["skipped"] += 1
+
+
 def _process_rule(
     conn,
     redis_client,
@@ -160,6 +273,10 @@ def _process_rule(
         stats["error"] = str(e)
         return stats
 
+    # Per-ticker (iterate_field) support — e.g. "ext_data.abandoned_tickers"
+    iterate_path = message_config.get("iterate_field")
+    sub_key_field = message_config.get("iterate_sub_key", "ticker")
+
     batch_size = CampaignEngineConfigs.BATCH_SIZE
     offset = 0
 
@@ -175,51 +292,22 @@ def _process_rule(
         stats["matched"] += len(rows)
 
         for profile in rows:
-            profile_id = profile["profile_id"]
-
             try:
-                # Frequency cap check (skip if Redis unavailable)
-                if redis_client and not check_frequency_cap(redis_client, rule_id, profile_id, freq_cap):
-                    stats["skipped"] += 1
-                    continue
-
-                # Re-check circuit breaker (may have tripped mid-batch)
-                if redis_client and not is_channel_available(redis_client, channel):
-                    stats["skipped"] += 1
-                    continue
-
-                # Dispatch via POST /notification/send
-                delivery_status, response = dispatch_message(
-                    channel=channel,
-                    profile=profile,
-                    message_config=message_config,
-                    conn=conn,
-                    rule_id=rule_id,
-                    template_row=template_row,
-                )
-
-                # Log delivery
-                log_delivery(
-                    conn, tenant_id, rule_id, profile_id,
-                    channel, delivery_status.value, response, today_str,
-                )
-
-                if delivery_status == DeliveryStatus.SENT:
-                    if redis_client:
-                        record_send(redis_client, rule_id, profile_id, freq_cap)
-                        record_success(redis_client, channel)
-                    stats["sent"] += 1
-                elif delivery_status == DeliveryStatus.RETRY:
-                    if redis_client:
-                        record_failure(redis_client, channel)
-                    stats["errored"] += 1
+                if iterate_path:
+                    _dispatch_iterate_for_profile(
+                        conn, redis_client, rule_id, rule_name, channel, profile,
+                        message_config, template_row, freq_cap, tenant_id, today_str,
+                        iterate_path, sub_key_field, stats,
+                    )
                 else:
-                    stats["skipped"] += 1
-
+                    _dispatch_for_profile(
+                        conn, redis_client, rule_id, rule_name, channel, profile,
+                        message_config, template_row, freq_cap, tenant_id, today_str, stats,
+                    )
             except Exception as e:
                 logger.error(
                     "[Engine] Rule=%s profile=%s error: %s",
-                    rule_name, profile_id, e,
+                    rule_name, profile.get("profile_id"), e,
                 )
                 stats["errored"] += 1
 

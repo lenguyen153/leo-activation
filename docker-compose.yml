@@ -41,8 +41,11 @@ services:
       # SECURE BINDING: Exposes the Ngrok X-Ray dashboard only to the local server
       - "127.0.0.1:4040:4040"
   celery-worker:
+    build: .
     image: leo-activation:latest
     command: celery -A data_workers.celery_app.worker worker --loglevel=info
+    volumes:
+      - .:/app
     env_file: .env
     environment:
       - CELERY_REDIS_URL=redis://redis:6379/1
@@ -55,6 +58,7 @@ services:
     restart: unless-stopped
 
   celery-beat:
+    build: .
     image: leo-activation:latest
     command: celery -A data_workers.celery_app.worker beat --loglevel=info
     env_file: .env

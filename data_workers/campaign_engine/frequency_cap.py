@@ -21,6 +21,7 @@ def check_frequency_cap(
     rule_id: str,
     profile_id: str,
     frequency_cap: dict,
+    sub_key: str | None = None,
 ) -> bool:
     """
     Return True if the profile is eligible to receive this campaign.
@@ -49,8 +50,9 @@ def check_frequency_cap(
         if elapsed_h < min_cooldown_h:
             return False
 
-    # 3. Campaign-specific cooldown
-    campaign_key = f"leo:campaign:{rule_id}:{profile_id}:last_sent"
+    # 3. Campaign-specific cooldown (optionally scoped by sub_key, e.g. per-ticker)
+    sub_suffix = f":{sub_key}" if sub_key else ""
+    campaign_key = f"leo:campaign:{rule_id}:{profile_id}{sub_suffix}:last_sent"
     last_sent = redis_client.get(campaign_key)
     if last_sent:
         last_ts = datetime.fromisoformat(last_sent.decode() if isinstance(last_sent, bytes) else last_sent)
@@ -66,6 +68,7 @@ def record_send(
     rule_id: str,
     profile_id: str,
     frequency_cap: dict,
+    sub_key: str | None = None,
 ) -> None:
     """Record a successful send in Redis for frequency capping."""
     now_iso = datetime.now(timezone.utc).isoformat()
@@ -74,8 +77,9 @@ def record_send(
 
     pipe = redis_client.pipeline()
 
-    # Campaign cooldown
-    campaign_key = f"leo:campaign:{rule_id}:{profile_id}:last_sent"
+    # Campaign cooldown (optionally scoped by sub_key)
+    sub_suffix = f":{sub_key}" if sub_key else ""
+    campaign_key = f"leo:campaign:{rule_id}:{profile_id}{sub_suffix}:last_sent"
     pipe.setex(campaign_key, cooldown_days * 86400, now_iso)
 
     # Global daily counter

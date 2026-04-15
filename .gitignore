@@ -209,4 +209,8 @@ __marimo__/
 
 # claude
 .claude/
-.cladeignore
+.claudeignore
+CLAUDE.md
+CLAUDE_TEMPLATE_EN.md
+data_workers/scripts/sync_prod_to_local_arango.py
+
