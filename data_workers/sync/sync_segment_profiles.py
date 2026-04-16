@@ -1,4 +1,3 @@
-import logging
 import uuid
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
@@ -10,12 +9,14 @@ import redis as redis_lib
 # --- Imports (Assuming these exist in your project structure) ---
 from data_models.dbo_tenant import resolve_tenant_id, set_tenant_context
 from data_utils.db_factory import get_db_context
+from data_utils.logging_config import configure_logging, get_logger, log_event
 from data_utils.settings import DatabaseSettings
 from data_workers.repositories.arango_profile_repository import ArangoProfileRepository
 from data_workers.sync.arango_to_pg_profile_sync_service import ArangoToPostgresSyncService
 from data_workers.repositories.pg_profile_repository import PGProfileRepository
 
-logger = logging.getLogger(__name__)
+configure_logging()
+logger = get_logger(__name__)
 
 # Global executor for offloading sync tasks to threads
 # You can also pass a specific executor if running inside a larger app
@@ -126,10 +127,8 @@ def _execute_sync_logic(
             # 6. Commit
             pg_session.commit()
 
-            logger.info(
-                "Sync completed successfully. Tenant: %s | Profiles: %d",
-                resolved_tid, synced_count
-            )
+            log_event(logger, "segment_sync_complete",
+                      tenant=str(resolved_tid), profiles=synced_count)
 
             # 7. Populate fingerprint→profile_id Redis cache for real-time CDC pipeline
             # Use a fresh ArangoDB connection to avoid stale/closed session issues

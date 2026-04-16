@@ -13,7 +13,6 @@ Run:
   python -m data_workers.scripts.poll_market_snapshot
 """
 
-import logging
 import os
 import time
 from datetime import datetime, timedelta, timezone
@@ -23,18 +22,21 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from data_utils.logging_config import configure_logging, get_logger, log_event
 from data_utils.settings import DatabaseSettings
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
-logger = logging.getLogger(__name__)
+configure_logging()
+logger = get_logger(__name__)
 
 MARKET_API_URL = os.getenv(
     "MARKET_API_URL",
     "http://172.60.1.2:8889/api/market/info",
 )
 HTTP_TIMEOUT = int(os.getenv("MARKET_API_TIMEOUT", "10"))
-# Gap between API calls (ms). Default 0 = full speed; raise if rate-limited.
-HTTP_THROTTLE_MS = int(os.getenv("MARKET_API_THROTTLE_MS", "0"))
+# Batch throttle: pause HTTP_BATCH_PAUSE_MS after every HTTP_BATCH_SIZE calls.
+# Default: sleep 1s every 50 calls. Set HTTP_BATCH_PAUSE_MS=0 to disable.
+HTTP_BATCH_SIZE = int(os.getenv("MARKET_API_BATCH_SIZE", "50"))
+HTTP_BATCH_PAUSE_MS = int(os.getenv("MARKET_API_BATCH_PAUSE_MS", "1000"))
 
 
 def _load_all_tickers(conn) -> list[str]:
@@ -245,15 +247,21 @@ def run():
     logged_no_price_sample = False
     logged_empty_sample = False
 
-    throttle_s = HTTP_THROTTLE_MS / 1000.0
+    batch_pause_s = HTTP_BATCH_PAUSE_MS / 1000.0
 
     # Re-use one HTTP client for the whole poll so connections are pooled and
     # we don't exhaust local/ephemeral TCP ports.
     with httpx.Client(timeout=HTTP_TIMEOUT) as client:
-        for symbol in tickers:
+        for idx, symbol in enumerate(tickers):
             row, raw = _fetch_market_info(client, symbol)
-            if throttle_s > 0:
-                time.sleep(throttle_s)
+            # Batch throttle: sleep every HTTP_BATCH_SIZE calls (not on the last one).
+            if (
+                batch_pause_s > 0
+                and HTTP_BATCH_SIZE > 0
+                and (idx + 1) % HTTP_BATCH_SIZE == 0
+                and (idx + 1) < len(tickers)
+            ):
+                time.sleep(batch_pause_s)
             if not row:
                 skipped_no_row += 1
                 if not logged_empty_sample:
@@ -280,16 +288,14 @@ def run():
 
     conn.commit()
 
-    logger.info(
-        "Poll complete | polled=%d skipped_no_api_row=%d skipped_no_price=%d",
-        polled, skipped_no_row, skipped_no_price,
-    )
+    log_event(logger, "market_snapshot_polled",
+              polled=polled, skipped_no_api_row=skipped_no_row, skipped_no_price=skipped_no_price)
 
     # Compute volume analytics from accumulated history
     updated_vol = _compute_volume_analytics(conn)
     conn.commit()
     conn.close()
-    logger.info("Volume analytics updated for %d symbols", updated_vol)
+    log_event(logger, "volume_analytics_updated", symbols=updated_vol)
 
 
 if __name__ == "__main__":

@@ -16,7 +16,6 @@ Run:
 Schedule: run this BEFORE the campaign engine (e.g., at minute :50 of each hour).
 """
 
-import logging
 import os
 from datetime import datetime, timedelta, timezone
 
@@ -24,10 +23,11 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from data_utils.logging_config import configure_logging, get_logger, log_event
 from data_utils.settings import DatabaseSettings
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
-logger = logging.getLogger(__name__)
+configure_logging()
+logger = get_logger(__name__)
 
 TARGET_TENANT = os.getenv("TARGET_TENANT", "master")
 TARGET_SEGMENT = os.getenv("TARGET_SEGMENT", "Active in last 3 months")
@@ -199,7 +199,7 @@ def run(tenant_name: str | None = None):
 
     logger.info("Writing to PostgreSQL ext_data.activity_drop_pct...")
     updated = _write_drops_to_pg(pg_conn, tenant_id, drops)
-    logger.info("Updated %d profiles", updated)
+    log_event(logger, "activity_drop_computed", updated=updated, severe=severe, moderate=moderate)
 
     pg_conn.close()
 

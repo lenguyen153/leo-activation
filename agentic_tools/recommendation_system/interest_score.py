@@ -1,4 +1,3 @@
-import logging
 from typing import Dict, Any, List
 import datetime
 import psycopg
@@ -6,9 +5,11 @@ from psycopg.rows import dict_row
 import os
 import json
 
+from data_utils.logging_config import configure_logging, get_logger, log_event
 from data_utils.settings import DatabaseSettings
 
-logger = logging.getLogger("agentic_tools.data_enrichment")
+configure_logging()
+logger = get_logger("agentic_tools.data_enrichment")
 
 # --- Configuration ---
 HALF_LIFE_DAYS = 7.0
@@ -115,7 +116,7 @@ def resolve_ids(conn, tenant_name: str, segment_name: str) -> tuple:
         if not s_uuid:
              raise ValueError(f"Could not parse ID for segment '{segment_name}' from profile data.")
 
-        logger.info(f"✅ Resolved IDs - Tenant: {t_uuid}, Segment: {s_uuid}")
+        logger.info("✅ Resolved IDs - Tenant: %s, Segment: %s", t_uuid, s_uuid)
         return t_uuid, s_uuid
     
 
@@ -217,11 +218,11 @@ def get_batch_scoring_data(settings: DatabaseSettings, start_time_iso: str, end_
         cursor = db.aql.execute(scoring_query, bind_vars=bind_vars)
         results = [r for r in cursor]
         
-        logger.info(f"📥 ArangoDB: Found {len(results)} pairs for segment {segment_uuid}.")
+        logger.info("📥 ArangoDB: Found %d pairs for segment %s.", len(results), segment_uuid)
         return results
 
     except Exception as e:
-        logger.error(f"❌ ArangoDB Query failed: {e}")
+        logger.error("❌ ArangoDB Query failed: %s", e)
         return []
 
 # --- 3. POSTGRES UPSERT LOGIC ---
@@ -238,7 +239,7 @@ def run_batch_scoring_job(settings: DatabaseSettings, start_time: str, end_time:
         batch_data = get_batch_scoring_data(settings, start_time, end_time, segment_uuid)
         
         if not batch_data:
-            logger.info("✅ Job finished: No relevant events found.")
+            log_event(logger, "✅ interest_score_job_complete", profiles=0, reason="no_events")
             return
 
         # C. Filter out orphaned profiles not present in cdp_profiles
@@ -254,11 +255,11 @@ def run_batch_scoring_job(settings: DatabaseSettings, start_time: str, end_time:
             }
         skipped = len(arango_profile_ids) - len(valid_profile_ids)
         if skipped:
-            logger.info(f"⏭️ Skipping {skipped} orphaned profile(s) not in cdp_profiles.")
+            logger.info("⏭️ Skipping %d orphaned profile(s) not in cdp_profiles.", skipped)
         batch_data = [e for e in batch_data if e['profile_id'] in valid_profile_ids]
 
         if not batch_data:
-            logger.info("✅ Job finished: No valid profiles to process after filtering.")
+            log_event(logger, "✅ interest_score_job_complete", profiles=0, reason="all_orphaned")
             return
 
         # D. Process Upserts
@@ -340,11 +341,12 @@ def run_batch_scoring_job(settings: DatabaseSettings, start_time: str, end_time:
                 ))
             
             conn.commit()
-            logger.info("✅ Batch Upsert Complete.")
-            
+            upserted = len(batch_data)
+            log_event(logger, "✅ interest_score_upsert_complete", upserted=upserted)
+
     except Exception as e:
         conn.rollback()
-        logger.error(f"❌ Batch Job Failed: {e}")
+        logger.error("❌ Batch Job Failed: %s", e)
     finally:
         conn.close()
 
@@ -357,10 +359,10 @@ def run_garbage_collection(settings: DatabaseSettings):
             cur.execute(query, (SCORE_THRESHOLD,))
             deleted_count = cur.rowcount
         conn.commit()
-        logger.info(f"🧹 GC: Removed {deleted_count} rows.")
+        logger.info("🧹 GC: Removed %d rows.", deleted_count)
     except Exception as e:
         conn.rollback()
-        logger.error(f"❌ GC Failed: {e}")
+        logger.error("❌ GC Failed: %s", e)
     finally:
         conn.close()
 
@@ -495,21 +497,19 @@ def get_profile_affinity(conn, tenant_uuid: str, lookup_key: str) -> Dict[str, A
     }
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
     settings = DatabaseSettings()
-    
-    print("--- 1. Running Garbage Collection ---")
+
+    logger.info("gc_start")
     run_garbage_collection(settings)
-    
+
     # 2. Calculate Window
     now = datetime.datetime.now(datetime.timezone.utc)
     window_end = now.replace(minute=0, second=0, microsecond=0)
     window_start = window_end - datetime.timedelta(hours=1)
-    
+
     start_str = window_start.isoformat()
     end_str = window_end.isoformat()
-    
-    logger.info(f"🚀 Starting Job for Tenant: {TARGET_TENANT}")
-    logger.info(f"📅 Window: {start_str} to {end_str}")
-    
+
+    logger.info("🚀 Starting Job for Tenant: %s | Window: %s to %s", TARGET_TENANT, start_str, end_str)
+
     run_batch_scoring_job(settings, start_str, end_str)

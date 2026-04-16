@@ -4,15 +4,15 @@ Used by the real-time scoring consumer for O(1) profile lookups.
 Keys have 24h TTL. Intended to run every 5 minutes via cron.
 """
 
-import logging
 import os
 
 import redis
 
+from data_utils.logging_config import configure_logging, get_logger, log_event
 from data_utils.settings import DatabaseSettings
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+configure_logging()
+logger = get_logger(__name__)
 
 
 def main():
@@ -36,11 +36,7 @@ def main():
             r.setex(f"fp:{doc['fid']}", 86400, doc["pid"])
             count += 1
 
-    logger.info(
-        "[FP Cache] Populated %d fingerprint entries (TTL=24h, segment=%s)",
-        count,
-        target_segment,
-    )
+    log_event(logger, "fingerprint_cache_populated", entries=count, segment=target_segment)
 
 
 if __name__ == "__main__":

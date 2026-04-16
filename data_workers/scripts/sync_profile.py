@@ -1,10 +1,11 @@
-import logging
 import sys
 from typing import Optional
 
+from data_utils.logging_config import configure_logging, get_logger
 from data_workers.sync.sync_segment_profiles import run_synch_profiles
 
-logger = logging.getLogger(__name__)
+configure_logging()
+logger = get_logger(__name__)
 
 
 def main(argv: Optional[list[str]] = None) -> None:
@@ -25,8 +26,4 @@ def main(argv: Optional[list[str]] = None) -> None:
 
 
 if __name__ == "__main__":
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
-    )
     main()

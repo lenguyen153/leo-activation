@@ -1,4 +1,3 @@
-import logging
 import sys
 import os
 import json
@@ -6,6 +5,7 @@ import psycopg
 from typing import Dict, Any, List, Tuple
 
 # --- Imports ---
+from data_utils.logging_config import configure_logging, get_logger, log_event
 from data_utils.settings import DatabaseSettings
 
 # REUSE: Import strict logic from the existing worker
@@ -15,7 +15,8 @@ from agentic_tools.recommendation_system.interest_score import resolve_ids
 from agentic_tools.recommendation_system.predictive_engine import predict_user_event
 from agentic_tools.recommendation_system.prescriptive_engine import recommend_system_action
 
-logger = logging.getLogger("agentic_tools.nba_engine")
+configure_logging()
+logger = get_logger("agentic_tools.nba_engine")
 
 # --- Configuration ---
 # Threshold matches the 'Consideration' zone start in Predictive Engine (0.1), 
@@ -62,7 +63,7 @@ def run_batch_nba_update(settings: DatabaseSettings):
         # 1. Resolve Context
         tenant_uuid, _ = resolve_ids(conn, TARGET_TENANT, TARGET_SEGMENT)
         
-        logger.info(f"🚀 Starting Batch NBA Update for Tenant: {TARGET_TENANT}")
+        logger.info("🚀 Starting Batch NBA Update for Tenant: %s", TARGET_TENANT)
 
         # 2. Bulk Fetch Query (Top 1 Product Per User)
         batch_query = """
@@ -103,7 +104,7 @@ def run_batch_nba_update(settings: DatabaseSettings):
             cur.execute(batch_query, (str(tenant_uuid), SCORE_THRESHOLD_WARM))
             rows = cur.fetchall()
             
-            logger.info(f"🔍 Found {len(rows)} candidates for NBA assignment.")
+            logger.info("🔍 Found %d candidates for NBA assignment.", len(rows))
 
             # B. Iterate & Update
             for row in rows:
@@ -145,11 +146,11 @@ def run_batch_nba_update(settings: DatabaseSettings):
             
             conn.commit()
         
-        logger.info(f"✅ Batch Update Complete. Updated {updated_count} rows.")
+        log_event(logger, "✅ nba_batch_update_complete", updated=updated_count)
 
     except Exception as e:
         conn.rollback()
-        logger.error(f"❌ Batch NBA Update Failed: {e}")
+        logger.error("❌ Batch NBA Update Failed: %s", e)
     finally:
         conn.close()
 
@@ -282,7 +283,6 @@ def get_next_likely_action(conn, tenant_uuid: str, profile_id: str) -> Dict[str,
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
     settings = DatabaseSettings()
     
     if len(sys.argv) > 1:

@@ -12,12 +12,12 @@ Pipeline per hourly run:
 """
 
 import json
-import logging
 import os
 from datetime import date, datetime, timezone
 
 import redis
 
+from data_utils.logging_config import configure_logging, get_logger, log_event
 from data_utils.settings import DatabaseSettings
 from main_configs import REDIS_URL, CampaignEngineConfigs
 
@@ -26,7 +26,8 @@ from .condition_evaluator import ConditionEvaluator
 from .dispatcher import DeliveryStatus, dispatch_message, log_delivery
 from .frequency_cap import check_frequency_cap, record_send
 
-logger = logging.getLogger(__name__)
+configure_logging()
+logger = get_logger(__name__)
 
 
 def _should_run_now(cron_expr: str) -> bool:
@@ -390,12 +391,10 @@ def run_campaign_engine(tenant_name: str | None = None) -> dict:
             )
         conn.commit()
 
-        logger.info(
-            "[Engine] Run complete | rules=%d matched=%d sent=%d skipped=%d errored=%d | %.1fs",
-            totals["rules_evaluated"], totals["profiles_matched"],
-            totals["sent"], totals["skipped"], totals["errored"],
-            (run_finished - run_started).total_seconds(),
-        )
+        log_event(logger, "campaign_engine_run_complete",
+                  rules=totals["rules_evaluated"], matched=totals["profiles_matched"],
+                  sent=totals["sent"], skipped=totals["skipped"], errored=totals["errored"],
+                  duration_ms=round((run_finished - run_started).total_seconds() * 1000))
 
     except Exception as e:
         logger.exception("[Engine] Fatal error in campaign engine run")
@@ -410,9 +409,4 @@ def run_campaign_engine(tenant_name: str | None = None) -> dict:
 
 # Allow direct invocation: python -m data_workers.campaign_engine.engine
 if __name__ == "__main__":
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-    )
     result = run_campaign_engine()
-    print(json.dumps(result, indent=2))

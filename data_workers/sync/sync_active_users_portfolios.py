@@ -7,7 +7,6 @@ Runs as a standalone script OR via Celery beat.
 Will be retired once the CDC pipeline is restored.
 """
 import json
-import logging
 import os
 import re
 from datetime import datetime, timezone, timedelta
@@ -17,10 +16,12 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from data_utils.logging_config import configure_logging, get_logger, log_event
 from data_utils.settings import DatabaseSettings
 from agentic_tools.recommendation_system.interest_score import resolve_ids
 
-logger = logging.getLogger(__name__)
+configure_logging()
+logger = get_logger(__name__)
 
 # --------------------------------------------------
 # Constants
@@ -441,10 +442,8 @@ def sync_active_users_portfolios(
         h_count = _upsert_holdings(conn, holding_rows)
 
         conn.commit()
-        logger.info(
-            "Sync complete: %d portfolios, %d holdings, %d profiles updated",
-            p_count, h_count, profiles_updated,
-        )
+        log_event(logger, "portfolio_sync_complete",
+                  portfolios=p_count, holdings=h_count, profiles=profiles_updated)
         return {
             "portfolios": p_count,
             "holdings": h_count,
@@ -465,9 +464,5 @@ def sync_active_users_portfolios(
 # --------------------------------------------------
 
 if __name__ == "__main__":
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
-    )
     result = sync_active_users_portfolios()
-    print(f"Done: {result}")
+    log_event(logger, "sync_active_users_portfolios_done", **result)

@@ -4,15 +4,15 @@ Backfill primary_email from identities column in cdp_profiles.
 Finds all profiles where primary_email IS NULL but identities contains
 an "email:..." entry, extracts the address, and writes it to primary_email.
 """
-import logging
 from dotenv import load_dotenv
 
 load_dotenv()
 
+from data_utils.logging_config import configure_logging, get_logger, log_event
 from data_utils.settings import DatabaseSettings
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
-logger = logging.getLogger(__name__)
+configure_logging()
+logger = get_logger(__name__)
 
 SQL_BACKFILL = """
 UPDATE cdp_profiles
@@ -62,7 +62,7 @@ def run():
             rows = cur.fetchall()
         conn.commit()
 
-        logger.info("Backfill complete. Updated %d profiles.", len(rows))
+        log_event(logger, "primary_email_backfill_complete", updated=len(rows))
         for r in rows[:20]:
             logger.info("  profile_id=%-36s  primary_email=%s", r["profile_id"], r["primary_email"])
         if len(rows) > 20:

@@ -15,14 +15,13 @@ load_dotenv(override=True)
 # ============================================================
 # Logging Configuration
 # ============================================================
-# LOG_LEVEL is expected to be something like: DEBUG, INFO, WARNING, ERROR
-# Default to INFO if missing or invalid.
-LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+# LOG_GRANULARITY controls verbosity:
+#   verbose    (default) — INFO level, all progress + summary logs
+#   production           — SUMMARY level (25), only final results/warnings/errors
+from data_utils.logging_config import configure_logging
 
-logging.basicConfig(
-    level=getattr(logging, LOG_LEVEL, logging.INFO),
-    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-)
+LOG_GRANULARITY = os.getenv("LOG_GRANULARITY", "verbose")
+configure_logging()
 
 logger = logging.getLogger(__name__)
 

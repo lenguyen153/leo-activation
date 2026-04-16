@@ -22,7 +22,6 @@ Run BEFORE the campaign engine (hourly cron).
 """
 
 import json
-import logging
 import os
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
@@ -31,10 +30,11 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from data_utils.logging_config import configure_logging, get_logger, log_event
 from data_utils.settings import DatabaseSettings
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
-logger = logging.getLogger(__name__)
+configure_logging()
+logger = get_logger(__name__)
 
 TARGET_TENANT = os.getenv("TARGET_TENANT", "master")
 LOOKBACK_DAYS = int(os.getenv("ABANDONED_LOOKBACK_DAYS", "7"))
@@ -257,8 +257,7 @@ def run(tenant_name: str | None = None):
                 PRICE_DROP_THRESHOLD * 100, actionable_pairs, len(alerts))
 
     with_alerts, cleared = _write_abandoned_to_pg(conn, tenant_id, dict(alerts))
-    logger.info("Wrote alerts for %d profiles | cleared stale lists on %d profiles",
-                with_alerts, cleared)
+    log_event(logger, "abandoned_cart_computed", profiles_alerted=with_alerts, profiles_cleared=cleared)
 
     conn.close()
 
