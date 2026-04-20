@@ -257,7 +257,13 @@ def run(tenant_name: str | None = None):
                 PRICE_DROP_THRESHOLD * 100, actionable_pairs, len(alerts))
 
     with_alerts, cleared = _write_abandoned_to_pg(conn, tenant_id, dict(alerts))
-    log_event(logger, "abandoned_cart_computed", profiles_alerted=with_alerts, profiles_cleared=cleared)
+    log_event(logger, "abandoned_cart_computed",
+              events_fetched=len(events),
+              abandoned_pairs=total_pairs, abandoned_profiles=len(abandoned),
+              historical_prices_resolved=len(viewed_prices),
+              current_prices_loaded=len(current_prices),
+              actionable_pairs=actionable_pairs, actionable_profiles=len(alerts),
+              profiles_alerted=with_alerts, profiles_cleared=cleared)
 
     conn.close()
 

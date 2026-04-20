@@ -199,7 +199,9 @@ def run(tenant_name: str | None = None):
 
     logger.info("Writing to PostgreSQL ext_data.activity_drop_pct...")
     updated = _write_drops_to_pg(pg_conn, tenant_id, drops)
-    log_event(logger, "activity_drop_computed", updated=updated, severe=severe, moderate=moderate)
+    log_event(logger, "activity_drop_computed",
+              events_fetched=len(events), profiles_with_baseline=len(drops),
+              severe=severe, moderate=moderate, updated=updated)
 
     pg_conn.close()
 

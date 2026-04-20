@@ -78,16 +78,14 @@ def _install_signal_handlers(loop: asyncio.AbstractEventLoop) -> None:
 # PII Scrubbing placeholder
 # ---------------------------------------------------------------------------
 def scrub_pii(payload: dict) -> dict:
-    """Strip or mask PII fields before forwarding.
-
-    >>> # Example: remove hypothetical PII keys
-    >>> # payload.pop("email", None)
-    >>> # payload.pop("phone", None)
-
-    Add your scrubbing rules here.  The function receives the deserialized
-    Kafka value and must return the cleaned dict.
-    """
-    return payload
+    """Strip PII and reduce payload to only the fields forwarded over WS."""
+    return {
+        "base_account_id": payload.get("base_account_id"),
+        "ticker": payload.get("ticker"),
+        "metric_name": payload.get("metric_name"),
+        "event_payload": payload.get("event_data", {}),
+        "updated_at": payload.get("updated_at"),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -111,9 +109,8 @@ def _create_consumer() -> Consumer:
 def _create_producer() -> Producer:
     conf = {
         "bootstrap.servers": KAFKA_BOOTSTRAP_SERVERS,
-        "acks": "all",
-        "enable.idempotence": True,
-        "retries": 5,
+        "acks": 1,
+        "retries": 3,
         "compression.type": "lz4",
     }
     return Producer(conf)

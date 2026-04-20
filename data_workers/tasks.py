@@ -261,7 +261,7 @@ def populate_fingerprint_cache_task(self) -> None:
     from data_utils.settings import DatabaseSettings
 
     cdc_redis_url = os.getenv("CDC_REDIS_URL", "redis://redis:6379/2")
-    target_segment = os.getenv("TARGET_SEGMENT", "Active last 3 months")
+    target_segment = os.getenv("TARGET_SEGMENT", "Active in last 3 months")
 
     settings = DatabaseSettings()
     db = settings.get_arango_db()
@@ -270,7 +270,7 @@ def populate_fingerprint_cache_task(self) -> None:
     query = """
     FOR p IN cdp_profile
         FILTER @seg IN p.inSegments[*].name
-        FILTER p.fingerprintId != null
+        FILTER p.fingerprintId != null AND p.fingerprintId != ""
         RETURN { fid: p.fingerprintId, pid: p._key }
     """
     cursor = db.aql.execute(query, bind_vars={"seg": target_segment})

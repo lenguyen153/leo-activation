@@ -152,7 +152,11 @@ def main():
                     # 1. Resolve fingerprint → profile_id
                     profile_id = _resolve_fingerprint(r, event.fingerprint_id)
                     if not profile_id:
-                        logger.debug("No profile mapping for fingerprint %s, skipping", event.fingerprint_id)
+                        logger.warning(
+                            "No Redis mapping for fingerprint %s (ticker=%s) — "
+                            "run populate_fingerprint_cache_task or check TARGET_SEGMENT",
+                            event.fingerprint_id, event.ticker,
+                        )
                         break
 
                     # 2. Resolve tenant
@@ -160,7 +164,11 @@ def main():
 
                     # 3. Validate profile exists in PG
                     if not validate_profile(conn, profile_id):
-                        logger.debug("Profile %s not in PG, skipping", profile_id)
+                        logger.warning(
+                            "Profile %s not in cdp_profiles (fingerprint=%s, ticker=%s) — "
+                            "run sync_profiles_task",
+                            profile_id, event.fingerprint_id, event.ticker,
+                        )
                         break
 
                     if dry_run:
@@ -196,7 +204,10 @@ def main():
 
                     # 7. Publish ScoreUpdateMessage
                     score_delta = new_interest - prev_interest
-                    base_account_id = fetch_base_account_id(conn, profile_id)
+                    base_account_id = (
+                        fetch_base_account_id(conn, profile_id)
+                        or event.event_data.get("account_no")
+                    )
                     update_msg = ScoreUpdateMessage(
                         tenant_id=tenant_id,
                         profile_id=profile_id,
@@ -207,6 +218,7 @@ def main():
                         raw_score=new_raw,
                         score_delta=score_delta,
                         updated_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                        event_data=event.event_data,
                     )
                     producer.produce(
                         topic=OUTPUT_TOPIC,

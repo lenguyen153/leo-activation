@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PROFILE_ID="6D8sWO4mkAQgwPV02vzzqi"
+SEGMENT_ID="6D8sWO4mkAQgwPV02vzzqi"
 
-echo "--- Starting scheduled job for profile $PROFILE_ID at $(date) ---"
+echo "--- Starting scheduled job for segment $SEGMENT_ID at $(date) ---"
 
 echo "--- Step 1: Syncing profile ---"
-python -m data_workers.scripts.sync_profile "$PROFILE_ID"
+python -m data_workers.scripts.sync_profile "$SEGMENT_ID"
 
 echo "--- Step 2: Backfilling primary email from identities ---"
 python -m data_workers.scripts.backfill_primary_email

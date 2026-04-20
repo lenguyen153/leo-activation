@@ -17,7 +17,7 @@ logger = get_logger(__name__)
 
 def main():
     cdc_redis_url = os.getenv("CDC_REDIS_URL", "redis://redis:6379/2")
-    target_segment = os.getenv("TARGET_SEGMENT", "Active last 3 months")
+    target_segment = os.getenv("TARGET_SEGMENT", "Active in last 3 months")
 
     settings = DatabaseSettings()
     db = settings.get_arango_db()

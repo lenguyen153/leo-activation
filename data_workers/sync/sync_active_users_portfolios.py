@@ -85,25 +85,29 @@ FOR event IN cdp_trackingevent
     FILTER event.eventData.current_account_id != null
     FILTER event.eventData.current_account_id != ""
 
-    LET ref_id = (
-        event.refProfileId != null AND event.refProfileId != ""
-        ? event.refProfileId
-        : event.fingerprintId
-    )
-    FILTER ref_id != null
-
     SORT event.createdAt DESC
 
     COLLECT
-        account_id = event.eventData.current_account_id,
-        profile_id = ref_id
+        account_id = event.eventData.current_account_id
     INTO grp
 
-    LET latest = grp[0].event.eventData
+    LET latest_event = FIRST(
+        FOR g IN grp
+            SORT g.event.createdAt DESC
+            LIMIT 1
+            RETURN g.event
+    )
+    LET latest = latest_event.eventData
+    LET ref_id  = (
+        latest_event.refProfileId != null AND latest_event.refProfileId != ""
+        ? latest_event.refProfileId
+        : latest_event.fingerprintId
+    )
 
     RETURN {
         account_id:       account_id,
-        profile_id:       profile_id,
+        base_account_id:  latest.account_no,
+        profile_id:       ref_id,
         nav:              latest.nav,
         cash_total:       latest.cash_total,
         debt_total:       latest.debt_total,
@@ -129,6 +133,7 @@ INSERT INTO portfolios (
 )
 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s)
 ON CONFLICT (tenant_id, account_id) DO UPDATE SET
+    base_account_id  = EXCLUDED.base_account_id,
     nav              = EXCLUDED.nav,
     cash_total       = EXCLUDED.cash_total,
     debt_total       = EXCLUDED.debt_total,
@@ -262,25 +267,22 @@ def parse_asset_allocation(alloc_raw) -> dict:
 # --------------------------------------------------
 
 
-def _build_portfolio_rows(events, tenant_id, valid_pids, base_by_pid):
+def _build_portfolio_rows(events, tenant_id, valid_pids):
     """
     One row per specific account_id (from asset-detail-view).
-    base_account_id is looked up from base_by_pid (sourced from account_no events).
+    base_account_id is taken directly from the event's account_no field.
     AQL already sorted DESC, first seen = latest.
     """
     seen = {}
     for evt in events:
         pid = evt.get("profile_id")
         aid = str(evt.get("account_id", "")).strip()
+        base_account_id = str(evt.get("base_account_id") or "").strip()
 
-        if pid not in valid_pids or not aid:
+        if pid not in valid_pids or not aid or not base_account_id:
             continue
         if aid in seen:
             continue
-
-        base_account_id = base_by_pid.get(pid)
-        if not base_account_id:
-            continue  # no account_no mapping known for this profile
 
         parsed = parse_account_suffix(aid)
         alloc = parse_asset_allocation(evt.get("asset_allocation"))
@@ -432,17 +434,31 @@ def sync_active_users_portfolios(
         # 4. Write base_account_id into cdp_profiles.ext_data
         profiles_updated = _update_profile_base_account_ids(conn, base_by_pid, valid_pids)
 
-        # 5. Transform + Load portfolios (one row per specific account_id)
-        portfolio_rows = _build_portfolio_rows(detail_events, tenant_id, valid_pids, base_by_pid)
+        # 5. Drop stale portfolio rows for profiles in this sync run.
+        #    Old rows may have been keyed on a wrong account_id (derived by stripping
+        #    the last digit), so ON CONFLICT won't match them — delete first.
+        synced_pids = list(valid_pids & base_by_pid.keys())
+        if synced_pids:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM portfolios WHERE tenant_id = %s AND profile_id = ANY(%s)",
+                    (tenant_id, synced_pids),
+                )
+            logger.info("Cleared stale portfolio rows for %d profiles", len(synced_pids))
+
+        # 6. Transform + Load portfolios (one row per specific account_id)
+        portfolio_rows = _build_portfolio_rows(detail_events, tenant_id, valid_pids)
         p_count = _upsert_portfolios(conn, portfolio_rows)
 
-        # 6. Transform + Load holdings (FK-safe: only accounts from step 5)
+        # 7. Transform + Load holdings (FK-safe: only accounts from step 6)
         valid_account_ids = {row[1] for row in portfolio_rows}
         holding_rows = _build_holding_rows(detail_events, tenant_id, valid_pids, valid_account_ids)
         h_count = _upsert_holdings(conn, holding_rows)
 
         conn.commit()
         log_event(logger, "portfolio_sync_complete",
+                  account_rows=len(account_no_rows), detail_events=len(detail_events),
+                  skipped=skipped, stale_cleared=len(synced_pids),
                   portfolios=p_count, holdings=h_count, profiles=profiles_updated)
         return {
             "portfolios": p_count,

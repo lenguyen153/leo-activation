@@ -179,8 +179,36 @@ def main():
                 # Filter + transform — track the tick of the last processed entry
                 all_messages = []
                 processed_tick = tick
+
+                # Diagnostic: count entries by collection
+                from collections import Counter as _Counter
+                cname_counts = _Counter(e.get("cname", "<none>") for e in entries if e.get("type") == 2300)
+                type_counts = _Counter(e.get("type") for e in entries)
+                logger.info(
+                    "[WAL batch] %d entries total | types=%s | doc-collections=%s",
+                    len(entries), dict(type_counts), dict(cname_counts),
+                )
+
                 for entry in entries:
                     entry_tick = int(entry.get("tick", last_tick))
+
+                    if entry.get("type") == 2300 and entry.get("cname") == "cdp_trackingevent":
+                        data = entry.get("data", {})
+                        metric = data.get("metricName")
+                        event_data = data.get("eventData", {})
+                        has_single = bool(event_data.get("instrument_id"))
+                        has_list = isinstance(event_data.get("instrument_id_list"), list) and len(event_data["instrument_id_list"]) > 0
+                        from services.cdc_poller.filters import CDC_METRIC_NAMES
+                        if metric not in CDC_METRIC_NAMES:
+                            logger.debug("[WAL skip] metricName=%r not whitelisted (tick=%d)", metric, entry_tick)
+                        elif not (has_single or has_list):
+                            logger.warning(
+                                "[WAL skip] metricName=%r has no instrument_id/instrument_id_list | eventData=%s (tick=%d)",
+                                metric, event_data, entry_tick,
+                            )
+                        else:
+                            logger.info("[WAL match] metricName=%r instrument_id=%r (tick=%d)", metric, event_data.get("instrument_id"), entry_tick)
+
                     if should_publish(entry):
                         all_messages.extend(transform(entry))
                     processed_tick = entry_tick

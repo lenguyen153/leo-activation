@@ -63,7 +63,7 @@ def run_batch_nba_update(settings: DatabaseSettings):
         # 1. Resolve Context
         tenant_uuid, _ = resolve_ids(conn, TARGET_TENANT, TARGET_SEGMENT)
         
-        logger.info("🚀 Starting Batch NBA Update for Tenant: %s", TARGET_TENANT)
+        logger.info("🚀 Starting NBA batch update for tenant: %s", TARGET_TENANT)
 
         # 2. Bulk Fetch Query (Top 1 Product Per User)
         batch_query = """
@@ -146,7 +146,8 @@ def run_batch_nba_update(settings: DatabaseSettings):
             
             conn.commit()
         
-        log_event(logger, "✅ nba_batch_update_complete", updated=updated_count)
+        log_event(logger, "✅ nba_batch_update_complete",
+                  candidates=len(rows), updated=updated_count)
 
     except Exception as e:
         conn.rollback()

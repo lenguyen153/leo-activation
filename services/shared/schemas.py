@@ -30,6 +30,7 @@ class ScoreUpdateMessage(BaseModel):
     raw_score: float
     score_delta: float = Field(default=0.0, description="Change from previous interest_score")
     updated_at: str
+    event_data: dict = Field(default_factory=dict, description="Raw eventData from cdp_trackingevent")
 
 
 class ScoredEventForward(BaseModel):

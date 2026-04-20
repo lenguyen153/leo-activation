@@ -29,13 +29,13 @@ def main():
     window_end = now.replace(minute=0, second=0, microsecond=0)
     window_start = window_end - timedelta(hours=6)
 
-    logger.info("Scoring window: %s -> %s", window_start.isoformat(), window_end.isoformat())
     run_batch_scoring_job(settings, window_start.isoformat(), window_end.isoformat())
 
     # 3. NBA update
     run_batch_nba_update(settings)
     log_event(logger, "batch_scoring_reconciliation_complete",
-              window_start=window_start.isoformat(), window_end=window_end.isoformat())
+              window_start=window_start.isoformat(), window_end=window_end.isoformat(),
+              window_hours=6)
 
 
 if __name__ == "__main__":

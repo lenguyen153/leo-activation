@@ -81,6 +81,9 @@ services:
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
       ZOOKEEPER_TICK_TIME: 2000
+    volumes:
+      - zookeeper_data:/var/lib/zookeeper/data
+      - zookeeper_log:/var/lib/zookeeper/log
     restart: unless-stopped
 
   kafka:
@@ -94,8 +97,27 @@ services:
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    volumes:
+      - kafka_data:/var/lib/kafka/data
     restart: unless-stopped
-
+  
+  init-kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    container_name: my_init_kafka
+    depends_on:
+      - kafka
+    # This command waits for Kafka to be ready, then creates the topic safely
+    command: >
+      bash -c "
+        echo 'Waiting for Kafka to be ready...'
+        cub kafka-ready -b kafka:9092 1 40
+        echo 'Creating topics...'
+        kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic cdp.events.raw --replication-factor 1 --partitions 1
+        kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic leo.score.updates --replication-factor 1 --partitions 1
+        kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic leo.ws-forwarder.dlq --replication-factor 1 --partitions 1
+        echo 'Topics created successfully.'
+      "
+    
   cdc-poller:
     build:
       context: .
@@ -109,12 +131,14 @@ services:
       - ARANGO_DB=${ARANGO_DB:-leo_cdp_source}
       - REDIS_URL=redis://redis:6379/2
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
-      - REALTIME_SCORING_ENABLED=${REALTIME_SCORING_ENABLED:-False}
+      - REALTIME_SCORING_ENABLED=${REALTIME_SCORING_ENABLED:-True}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
-      - redis
-      - kafka
+      redis:
+        condition: service_started
+      init-kafka:
+        condition: service_completed_successfully
     restart: unless-stopped
 
   scoring-consumer:
@@ -127,12 +151,14 @@ services:
       - REDIS_URL=redis://redis:6379/2
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
       - ARANGO_HOST=${ARANGO_HOST}
-      - REALTIME_SCORING_ENABLED=${REALTIME_SCORING_ENABLED:-False}
+      - REALTIME_SCORING_ENABLED=${REALTIME_SCORING_ENABLED:-True}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
-      - redis
-      - kafka
+      redis:
+        condition: service_started
+      init-kafka:
+        condition: service_completed_successfully
     restart: unless-stopped
 
   nba-publisher:
@@ -149,8 +175,10 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
-      - redis
-      - kafka
+      redis:
+        condition: service_started
+      init-kafka:
+        condition: service_completed_successfully
     restart: unless-stopped
 
   ws-forwarder:
@@ -167,5 +195,13 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
-      - kafka
+      redis:
+        condition: service_started
+      init-kafka:
+        condition: service_completed_successfully
     restart: unless-stopped
+
+volumes:
+  zookeeper_data:
+  zookeeper_log:
+  kafka_data:
