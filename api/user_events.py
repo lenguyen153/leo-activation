@@ -79,6 +79,12 @@ _PRIORITY_METRICS = [
 _PRIORITY_MAP = {name: idx for idx, name in enumerate(_PRIORITY_METRICS)}
 _FALLBACK_PRIORITY = len(_PRIORITY_METRICS)  # for any other event with instrument IDs
 _THREE_MONTHS_SECONDS = 90 * 24 * 3600  # ~3 months in seconds
+_MS_THRESHOLD = 1e11  # timestamps > this are treated as milliseconds and divided by 1000
+
+
+def _to_seconds(ts: float) -> float:
+    """Normalize a unix timestamp to seconds; auto-converts ms inputs (> 1e11)."""
+    return ts / 1000 if ts > _MS_THRESHOLD else ts
 
 
 # --- DATA MODELS ---
@@ -101,44 +107,53 @@ def _get_pg_connection() -> psycopg.Connection:
     return settings.get_pg_connection()
 
 
-def _resolve_profile_id_from_account(base_account_id: str) -> Optional[str]:
-    """Resolve base_account_id → profile_id via PG portfolios table."""
+def _resolve_profile_ids_by_email(email: str) -> List[str]:
+    """Resolve email → all profile_ids via PG cdp_profiles.primary_email."""
     conn = _get_pg_connection()
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT profile_id FROM portfolios WHERE base_account_id = %s LIMIT 1",
-                (base_account_id.strip(),),
+                "SELECT profile_id FROM cdp_profiles WHERE primary_email = %s",
+                (email.strip(),),
             )
-            row = cur.fetchone()
-            if not row:
-                logger.warning(f"No portfolio found for base_account_id={base_account_id}")
-                return None
-            pid = row["profile_id"] if isinstance(row, dict) else row[0]
-            logger.info(f"Resolved base_account_id={base_account_id} → profile_id={pid}")
-            return pid
+            rows = cur.fetchall()
+            return [(r["profile_id"] if isinstance(r, dict) else r[0]) for r in rows]
     finally:
         conn.close()
 
 
-def _resolve_fingerprints_by_email(db, email: str) -> List[str]:
-    """Resolve email → fingerprintId(s) via ArangoDB cdp_profile."""
-    aql = """
-        FOR p IN cdp_profile
-            FILTER p.primaryEmail == @email
-            RETURN p.fingerprintId
-    """
-    cursor = db.aql.execute(aql, bind_vars={"email": email.strip()})
-    return [fp for fp in cursor if fp]
+def _resolve_profile_ids_by_base_account(base_account_id: str) -> List[str]:
+    """Resolve base_account_id via cdp_profiles.ext_data → primary_email → all profile_ids."""
+    conn = _get_pg_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT primary_email FROM cdp_profiles WHERE ext_data->>'base_account_id' = %s LIMIT 1",
+                (base_account_id.strip(),),
+            )
+            row = cur.fetchone()
+            if not row:
+                return []
+            email = row["primary_email"] if isinstance(row, dict) else row[0]
+            if not email:
+                return []
+            cur.execute(
+                "SELECT profile_id FROM cdp_profiles WHERE primary_email = %s",
+                (email,),
+            )
+            rows = cur.fetchall()
+            return [(r["profile_id"] if isinstance(r, dict) else r[0]) for r in rows]
+    finally:
+        conn.close()
 
 
-# Query events by refProfileId (for profile_id / base_account_id lookups)
-_AQL_TOP_EVENTS_BY_PROFILE = """
+_AQL_TOP_EVENTS_BY_PROFILES = """
 FOR event IN cdp_trackingevent
-    FILTER event.refProfileId == @profile_id
+    FILTER event.refProfileId IN @profile_ids
     FILTER event.eventData.timestamp != null
     FILTER event.eventData.timestamp >= @cutoff_ts
     FILTER @upper_ts == null OR event.eventData.timestamp <= @upper_ts
+    FILTER @metric_name == null OR event.metricName == @metric_name
 
     LET single = event.eventData.instrument_id
     LET list   = event.eventData.instrument_id_list
@@ -150,32 +165,7 @@ FOR event IN cdp_trackingevent
 
     FILTER LENGTH(ids) > 0
     FILTER event.metricName IN @priority_metrics OR LENGTH(ids) > 0
-
-    RETURN {
-        metricName:  event.metricName,
-        instrumentIds: ids,
-        createdAt:   event.eventData.timestamp
-    }
-"""
-
-# Query events by fingerprintId (for email lookups)
-_AQL_TOP_EVENTS_BY_FINGERPRINT = """
-FOR event IN cdp_trackingevent
-    FILTER event.fingerprintId IN @fingerprints
-    FILTER event.eventData.timestamp != null
-    FILTER event.eventData.timestamp >= @cutoff_ts
-    FILTER @upper_ts == null OR event.eventData.timestamp <= @upper_ts
-
-    LET single = event.eventData.instrument_id
-    LET list   = event.eventData.instrument_id_list
-    LET ids = (
-        single != null AND single != ""
-        ? [single]
-        : (IS_ARRAY(list) AND LENGTH(list) > 0 ? list : [])
-    )
-
-    FILTER LENGTH(ids) > 0
-    FILTER event.metricName IN @priority_metrics OR LENGTH(ids) > 0
+    FILTER @instrument_id == null OR @instrument_id IN ids
 
     RETURN {
         metricName:  event.metricName,
@@ -231,42 +221,38 @@ def _fetch_top_events(
     top_k: int,
     from_ts: Optional[float] = None,
     to_ts: Optional[float] = None,
+    instrument_id: Optional[str] = None,
+    metric_name: Optional[str] = None,
 ) -> List[TopEventItem]:
-    db = _get_arango_db()
-    cutoff_ts = from_ts if from_ts is not None else time.time() - _THREE_MONTHS_SECONDS
-    upper_ts = to_ts
-
-    # Path 1: base_account_id → PG lookup → refProfileId in Arango
     if base_account_id:
-        resolved_pid = _resolve_profile_id_from_account(base_account_id)
-        if not resolved_pid:
-            raise HTTPException(status_code=404, detail=f"No portfolio found for baseAccountId '{base_account_id}'.")
-        cursor = db.aql.execute(
-            _AQL_TOP_EVENTS_BY_PROFILE,
-            bind_vars={"profile_id": resolved_pid, "priority_metrics": _PRIORITY_METRICS, "cutoff_ts": cutoff_ts, "upper_ts": upper_ts},
-        )
-        return _sort_and_truncate(list(cursor), top_k)
-
-    # Path 2: profile_id → refProfileId directly in Arango
-    if profile_id:
-        cursor = db.aql.execute(
-            _AQL_TOP_EVENTS_BY_PROFILE,
-            bind_vars={"profile_id": profile_id.strip(), "priority_metrics": _PRIORITY_METRICS, "cutoff_ts": cutoff_ts, "upper_ts": upper_ts},
-        )
-        return _sort_and_truncate(list(cursor), top_k)
-
-    # Path 3: email → fingerprintId via cdp_profile → events
-    if email:
-        fingerprints = _resolve_fingerprints_by_email(db, email)
-        if not fingerprints:
+        profile_ids = _resolve_profile_ids_by_base_account(base_account_id)
+        if not profile_ids:
+            raise HTTPException(status_code=404, detail=f"No profile found for baseAccountId '{base_account_id}'.")
+    elif profile_id:
+        profile_ids = [profile_id.strip()]
+    elif email:
+        profile_ids = _resolve_profile_ids_by_email(email)
+        if not profile_ids:
             raise HTTPException(status_code=404, detail=f"No profile found for email '{email}'.")
-        cursor = db.aql.execute(
-            _AQL_TOP_EVENTS_BY_FINGERPRINT,
-            bind_vars={"fingerprints": fingerprints, "priority_metrics": _PRIORITY_METRICS, "cutoff_ts": cutoff_ts, "upper_ts": upper_ts},
-        )
-        return _sort_and_truncate(list(cursor), top_k)
+    else:
+        return []
 
-    return []
+    db = _get_arango_db()
+    # Stored timestamps are in milliseconds; convert seconds-based inputs to ms
+    cutoff_ts = (from_ts * 1000) if from_ts is not None else (time.time() - _THREE_MONTHS_SECONDS) * 1000
+    upper_ts = (to_ts * 1000) if to_ts is not None else None
+    cursor = db.aql.execute(
+        _AQL_TOP_EVENTS_BY_PROFILES,
+        bind_vars={
+            "profile_ids": profile_ids,
+            "priority_metrics": _PRIORITY_METRICS,
+            "cutoff_ts": cutoff_ts,
+            "upper_ts": upper_ts,
+            "metric_name": metric_name,
+            "instrument_id": instrument_id,
+        },
+    )
+    return _sort_and_truncate(list(cursor), top_k)
 
 
 # --- ENDPOINT ---
@@ -326,14 +312,17 @@ async def get_top_events_range(
     topK: int = Query(5, ge=5, le=50, description="Number of events to return (5-50)"),
     fromTs: float = Query(..., description="Start of time range (unix timestamp)"),
     toTs: Optional[float] = Query(None, description="End of time range (unix timestamp, defaults to now)"),
+    instrumentId: Optional[str] = Query(None, description="Filter by instrument ID (optional)"),
+    metricName: Optional[str] = Query(None, description="Filter by metric name (optional)"),
 ):
     """
     Same as /top but filtered to events within [fromTs, toTs].
     Provide exactly one of `baseAccountId`, `email`, or `profileId`.
     `fromTs` cannot be more than 3 months old. `toTs` defaults to current time if omitted.
+    Optionally filter by `instrumentId` and/or `metricName`; omit either to return all.
     """
-    if toTs is None:
-        toTs = time.time()
+    fromTs = _to_seconds(fromTs)
+    toTs = _to_seconds(toTs) if toTs is not None else time.time()
 
     provided = sum(1 for v in [baseAccountId, email, profileId] if v)
     if provided == 0:
@@ -353,14 +342,18 @@ async def get_top_events_range(
 
     try:
         lookup = baseAccountId or profileId or email
-        cache_key = f"leo:user_events:top_range:{lookup}:{topK}:{fromTs}:{toTs}"
+        cache_key = f"leo:user_events:top_range:{lookup}:{topK}:{fromTs}:{toTs}:{instrumentId or 'all'}:{metricName or 'all'}"
         cached = _cache_get(cache_key)
         if cached:
             logger.info(f"[Cache HIT] {cache_key}")
             return [TopEventItem(**item) for item in json.loads(cached)]
 
         logger.info(f"[Cache MISS] {cache_key}")
-        results = _fetch_top_events(baseAccountId, email, profileId, topK, from_ts=fromTs, to_ts=toTs)
+        results = _fetch_top_events(
+            baseAccountId, email, profileId, topK,
+            from_ts=fromTs, to_ts=toTs,
+            instrument_id=instrumentId, metric_name=metricName,
+        )
 
         _cache_set(cache_key, json.dumps([r.model_dump() for r in results]))
         return results
@@ -379,34 +372,6 @@ class MetricTimestampsItem(BaseModel):
     profileId: str
     timestamps: List[float] = Field(default_factory=list)
 
-
-def _resolve_profile_ids_from_account(base_account_id: str) -> List[str]:
-    """Resolve base_account_id → all profile_ids via PG portfolios table."""
-    conn = _get_pg_connection()
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT DISTINCT profile_id FROM portfolios WHERE base_account_id = %s",
-                (base_account_id.strip(),),
-            )
-            rows = cur.fetchall()
-            return [
-                (r["profile_id"] if isinstance(r, dict) else r[0])
-                for r in rows
-            ]
-    finally:
-        conn.close()
-
-
-def _resolve_profile_ids_by_email(db, email: str) -> List[str]:
-    """Resolve email → all profile _keys via ArangoDB cdp_profile."""
-    aql = """
-        FOR p IN cdp_profile
-            FILTER p.primaryEmail == @email
-            RETURN p._key
-    """
-    cursor = db.aql.execute(aql, bind_vars={"email": email.strip()})
-    return [k for k in cursor if k]
 
 
 _AQL_METRIC_TIMESTAMPS = """
@@ -519,14 +484,13 @@ async def get_metric_timestamps(
 
         logger.info(f"[Cache MISS] {cache_key}")
 
-        # Resolve to profile_ids
+        # Resolve to profile_ids via PG cdp_profiles
         if baseAccountId:
-            profile_ids = _resolve_profile_ids_from_account(baseAccountId)
+            profile_ids = _resolve_profile_ids_by_base_account(baseAccountId)
             if not profile_ids:
-                raise HTTPException(status_code=404, detail=f"No portfolio found for baseAccountId '{baseAccountId}'.")
+                raise HTTPException(status_code=404, detail=f"No profile found for baseAccountId '{baseAccountId}'.")
         else:
-            db = _get_arango_db()
-            profile_ids = _resolve_profile_ids_by_email(db, email)
+            profile_ids = _resolve_profile_ids_by_email(email)
             if not profile_ids:
                 raise HTTPException(status_code=404, detail=f"No profile found for email '{email}'.")
 
