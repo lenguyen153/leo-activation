@@ -1,5 +1,5 @@
 """
-WebSocket Forwarder — Kafka → WebSocket bridge.
+WebSocket Forwarder — Kafka → WebSocket bridge + inbound command handler.
 
 Reads scored CDC events from Kafka and reliably streams them over a persistent
 WebSocket connection to an external team's server.  Designed for zero data loss:
@@ -10,13 +10,24 @@ WebSocket connection to an external team's server.  Designed for zero data loss:
   * On WS disconnect the consumer pauses and reconnects with exponential backoff.
   * Malformed-payload errors from the server route the message to a DLQ so the
     consumer never gets permanently stuck.
+
+Inbound command handling (server → us):
+  * {"action": "start_learning", "user_id": "<base_account_id>"}
+    → resolves profile_id via PG, streams all ArangoDB events back to the server
+  * {"action": "stop_learning", "user_id": "<base_account_id>"}
+    → cancels the active stream for that user
+
+All outbound sends are serialised through a shared asyncio.Lock so that the
+Kafka-forwarding loop and learning streams never interleave at the socket level.
 """
 
 import asyncio
 import json
+import logging
 import os
 import signal
 from datetime import datetime, timezone
+from typing import Optional
 
 import structlog
 import websockets
@@ -34,6 +45,7 @@ from services.ws_forwarder.config import (
     MAX_DLQ_RETRIES,
     MAX_SEND_RETRIES,
     WS_CLIENT_ID,
+    WS_FORWARDER_ENV,
     WS_HANDSHAKE_TIMEOUT,
     WS_PING_INTERVAL,
     WS_PING_TIMEOUT,
@@ -69,16 +81,14 @@ _shutdown_event = asyncio.Event()
 
 
 def _install_signal_handlers(loop: asyncio.AbstractEventLoop) -> None:
-    """Set _shutdown_event on SIGINT/SIGTERM so the main loop exits cleanly."""
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, _shutdown_event.set)
 
 
 # ---------------------------------------------------------------------------
-# PII Scrubbing placeholder
+# PII Scrubbing
 # ---------------------------------------------------------------------------
 def scrub_pii(payload: dict) -> dict:
-    """Strip PII and reduce payload to only the fields forwarded over WS."""
     return {
         "base_account_id": payload.get("base_account_id"),
         "ticker": payload.get("ticker"),
@@ -89,15 +99,13 @@ def scrub_pii(payload: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Kafka helpers (sync — run in executor from async code)
+# Kafka helpers
 # ---------------------------------------------------------------------------
 def _create_consumer() -> Consumer:
-    """Create a Kafka consumer with auto-commit DISABLED."""
     conf = {
         "bootstrap.servers": KAFKA_BOOTSTRAP_SERVERS,
         "group.id": CONSUMER_GROUP,
         "auto.offset.reset": "earliest",
-        # CRITICAL: we commit manually after WS ACK
         "enable.auto.commit": False,
     }
     consumer = Consumer(conf)
@@ -117,7 +125,6 @@ def _create_producer() -> Producer:
 
 
 def _send_to_dlq(producer: Producer, raw_value: bytes, error: str) -> None:
-    """Route a permanently failed message to the DLQ topic."""
     dlq_payload = {
         "original_topic": INPUT_TOPIC,
         "original_value": raw_value.decode("utf-8", errors="replace"),
@@ -137,15 +144,6 @@ def _send_to_dlq(producer: Producer, raw_value: bytes, error: str) -> None:
 # WebSocket connection manager
 # ---------------------------------------------------------------------------
 async def _connect_ws() -> websockets.ClientConnection:
-    """Open a persistent WS connection, complete the auth handshake, and
-    enable ping/pong keep-alive.
-
-    Handshake protocol:
-      1. Connect to the WS endpoint.
-      2. Server sends an auth_request message.
-      3. We respond with {"id": "<WS_CLIENT_ID>"}.
-      4. Server sends {"status": "accepted"}.
-    """
     ws = await websockets.connect(
         WS_URL,
         ping_interval=WS_PING_INTERVAL,
@@ -154,15 +152,12 @@ async def _connect_ws() -> websockets.ClientConnection:
     )
     logger.info("ws_tcp_connected", url=WS_URL)
 
-    # --- Step 1: wait for auth_request from server ---
     raw = await asyncio.wait_for(ws.recv(), timeout=WS_HANDSHAKE_TIMEOUT)
     logger.info("ws_handshake_received", message=raw[:200] if isinstance(raw, str) else str(raw)[:200])
 
-    # --- Step 2: send our client identity ---
     await ws.send(json.dumps({"id": WS_CLIENT_ID}))
     logger.info("ws_handshake_sent_id", client_id=WS_CLIENT_ID)
 
-    # --- Step 3: wait for accepted ---
     raw = await asyncio.wait_for(ws.recv(), timeout=WS_HANDSHAKE_TIMEOUT)
     resp = json.loads(raw)
     if resp.get("status") != "accepted":
@@ -174,7 +169,6 @@ async def _connect_ws() -> websockets.ClientConnection:
 
 
 async def _connect_with_backoff() -> websockets.ClientConnection:
-    """Reconnect loop with capped exponential back-off."""
     attempt = 0
     while not _shutdown_event.is_set():
         try:
@@ -185,29 +179,207 @@ async def _connect_with_backoff() -> websockets.ClientConnection:
             delay = min(BACKOFF_BASE * (2 ** (attempt - 1)), BACKOFF_MAX)
             WS_RECONNECTS.inc()
             logger.warning("ws_connect_failed", attempt=attempt, error=str(exc), retry_in=delay)
-            # Sleep interruptibly so we can shut down quickly
             try:
                 await asyncio.wait_for(_shutdown_event.wait(), timeout=delay)
-                # If we get here, shutdown was requested during the wait
                 raise SystemExit("Shutdown requested during reconnect backoff")
             except asyncio.TimeoutError:
-                # Timeout expired normally — continue retry loop
                 pass
 
 
 # ---------------------------------------------------------------------------
-# Send-and-Wait: the core delivery loop for a single message
+# Inbound message demultiplexer
+# ---------------------------------------------------------------------------
+async def _ws_receiver(
+    ws: websockets.ClientConnection,
+    ack_queue: asyncio.Queue,
+    cmd_queue: asyncio.Queue,
+) -> None:
+    """
+    Continuously reads from the WS connection and routes messages:
+      - {"status": ...}  → ack_queue   (Kafka forwarding ACKs)
+      - {"action": ...}  → cmd_queue   (start_learning / stop_learning)
+    Exits when the connection closes.
+    """
+    while not _shutdown_event.is_set():
+        try:
+            raw = await ws.recv()
+        except websockets.ConnectionClosed:
+            break
+        try:
+            msg = json.loads(raw)
+        except json.JSONDecodeError:
+            logger.debug("ws_non_json_inbound", raw=str(raw)[:200])
+            continue
+
+        if "status" in msg:
+            await ack_queue.put(msg)
+        elif "action" in msg:
+            logger.info("ws_command_received", action=msg.get("action"), user_id=msg.get("user_id"))
+            await cmd_queue.put(msg)
+        else:
+            logger.warning("ws_unroutable_message", msg=str(msg)[:200])
+
+
+# ---------------------------------------------------------------------------
+# Learning — DB helpers (sync, run in executor)
+# ---------------------------------------------------------------------------
+_AQL_ALL_EVENTS = """
+FOR event IN cdp_trackingevent
+    FILTER event.refProfileId == @profile_id OR event.fingerprintId == @profile_id
+    FILTER event.createdAt >= @start_time AND event.createdAt <= @stop_time
+    SORT event.createdAt ASC
+    RETURN {
+        metricName: event.metricName,
+        eventData: event.eventData,
+        createdAt: event.createdAt
+    }
+"""
+
+
+def _resolve_profile_id(base_account_id: str) -> Optional[str]:
+    from data_utils.settings import DatabaseSettings
+    settings = DatabaseSettings()
+    conn = settings.get_pg_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT profile_id FROM cdp_profiles WHERE ext_data->>'base_account_id' = %s LIMIT 1",
+                (base_account_id.strip(),),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            return row["profile_id"] if isinstance(row, dict) else row[0]
+    finally:
+        conn.close()
+
+
+def _fetch_all_events(profile_id: str, start_time: str, stop_time: str) -> list:
+    from data_utils.settings import DatabaseSettings
+    settings = DatabaseSettings()
+    db = settings.get_arango_db()
+    cursor = db.aql.execute(
+        _AQL_ALL_EVENTS,
+        bind_vars={"profile_id": profile_id, "start_time": start_time, "stop_time": stop_time},
+        batch_size=500,
+    )
+    return list(cursor)
+
+
+async def _fetch_and_send_learning_data(
+    user_id: str,
+    start_time: str,
+    stop_time: str,
+    ws: websockets.ClientConnection,
+    send_lock: asyncio.Lock,
+) -> None:
+    """Resolves profile, fetches all events, sends one bulk payload."""
+    loop = asyncio.get_event_loop()
+
+    profile_id = await loop.run_in_executor(None, _resolve_profile_id, user_id)
+    if not profile_id:
+        logger.warning("learning_no_profile", user_id=user_id)
+        async with send_lock:
+            await ws.send(json.dumps({
+                "action": "error",
+                "user_id": user_id,
+                "message": f"No profile found for user_id '{user_id}'",
+            }))
+        return
+
+    logger.info("learning_fetching_events", user_id=user_id, profile_id=profile_id)
+    try:
+        events = await loop.run_in_executor(None, _fetch_all_events, profile_id, start_time, stop_time)
+    except Exception as exc:
+        logger.error("learning_fetch_failed", user_id=user_id, error=str(exc))
+        async with send_lock:
+            await ws.send(json.dumps({
+                "action": "error",
+                "user_id": user_id,
+                "message": f"Failed to fetch events: {exc}",
+            }))
+        return
+
+    logger.info("learning_sending_data", user_id=user_id, total_events=len(events))
+    async with send_lock:
+        await ws.send(json.dumps({
+            "action": "learning_data",
+            "user_id": user_id,
+            "start_time": start_time,
+            "stop_time": stop_time,
+            "total_events": len(events),
+            "events": events,
+        }, default=str))
+
+    logger.info("learning_data_sent", user_id=user_id, total_events=len(events))
+
+
+# ---------------------------------------------------------------------------
+# Command handler
+# ---------------------------------------------------------------------------
+async def _command_handler(
+    cmd_queue: asyncio.Queue,
+    learning_user_ids: set,
+    ws: websockets.ClientConnection,
+    send_lock: asyncio.Lock,
+) -> None:
+    """
+    start_learning → records start_time, tags live Kafka events with mode=learning.
+    stop_learning  → fetches all ArangoDB events and sends them in one bulk payload.
+    """
+    sessions: dict[str, str] = {}  # user_id → start_time ISO string
+
+    while not _shutdown_event.is_set():
+        try:
+            cmd = await asyncio.wait_for(cmd_queue.get(), timeout=1.0)
+        except asyncio.TimeoutError:
+            continue
+
+        action = cmd.get("action", "").strip()
+        user_id = cmd.get("user_id", "").strip()
+
+        if not user_id:
+            logger.warning("ws_command_missing_user_id", action=action)
+            continue
+
+        if action == "start_learning":
+            if user_id in sessions:
+                logger.warning("learning_already_active", user_id=user_id)
+                continue
+            start_time = datetime.now(timezone.utc).isoformat()
+            sessions[user_id] = start_time
+            learning_user_ids.add(user_id)
+            logger.info("learning_started", user_id=user_id, start_time=start_time)
+
+        elif action == "stop_learning":
+            if user_id not in sessions:
+                logger.warning("learning_not_active", user_id=user_id)
+                continue
+            start_time = sessions.pop(user_id)
+            learning_user_ids.discard(user_id)
+            stop_time = datetime.now(timezone.utc).isoformat()
+            logger.info("learning_stop_received", user_id=user_id, start_time=start_time, stop_time=stop_time)
+            asyncio.create_task(
+                _fetch_and_send_learning_data(user_id, start_time, stop_time, ws, send_lock)
+            )
+
+        else:
+            logger.warning("ws_unknown_command", action=action)
+
+
+# ---------------------------------------------------------------------------
+# Send-and-Wait: Kafka event delivery
 # ---------------------------------------------------------------------------
 async def _send_and_wait_ack(
     ws: websockets.ClientConnection,
+    send_lock: asyncio.Lock,
+    ack_queue: asyncio.Queue,
     event_id: str,
     payload: dict,
 ) -> dict:
-    """Send a JSON envelope and wait for the server to ACK the event_id.
-
-    Returns the parsed ACK response dict.
-    Raises asyncio.TimeoutError if no ACK within ACK_TIMEOUT_SECONDS.
-    Raises websockets.ConnectionClosed if the connection drops mid-flight.
+    """
+    Send a Kafka event envelope and wait for the server's ACK from ack_queue.
+    Uses send_lock to avoid interleaving with learning-stream sends.
     """
     envelope = {
         "event_id": event_id,
@@ -215,28 +387,18 @@ async def _send_and_wait_ack(
         "sent_at": datetime.now(timezone.utc).isoformat(),
     }
     logger.info("ws_sending", event_id=event_id, payload=payload)
-    await ws.send(json.dumps(envelope))
+    async with send_lock:
+        await ws.send(json.dumps(envelope))
 
-    # Wait for the server's JSON response acknowledging *this* event_id.
-    # The server may send other messages (heartbeats, etc.), so we loop
-    # until we see our event_id or hit the timeout.
     deadline = asyncio.get_event_loop().time() + ACK_TIMEOUT_SECONDS
     while True:
         remaining = deadline - asyncio.get_event_loop().time()
         if remaining <= 0:
             raise asyncio.TimeoutError(f"No ACK for {event_id} within {ACK_TIMEOUT_SECONDS}s")
-
-        raw_resp = await asyncio.wait_for(ws.recv(), timeout=remaining)
         try:
-            resp = json.loads(raw_resp)
-        except json.JSONDecodeError:
-            logger.debug("ws_non_json_response", raw=raw_resp[:200])
-            continue
-
-        # The server acks sequentially without echoing event_id, so any
-        # response carrying a `status` field is the ack for the most
-        # recent send. Ignore heartbeats / server-pushed messages that
-        # lack a status field.
+            resp = await asyncio.wait_for(ack_queue.get(), timeout=remaining)
+        except asyncio.TimeoutError:
+            raise asyncio.TimeoutError(f"No ACK for {event_id} within {ACK_TIMEOUT_SECONDS}s")
         if "status" in resp:
             return resp
 
@@ -248,7 +410,6 @@ async def _run() -> None:
     loop = asyncio.get_running_loop()
     _install_signal_handlers(loop)
 
-    # Start Prometheus metrics server
     start_http_server(int(os.getenv("WS_FORWARDER_METRICS_PORT", "8082")))
     logger.info("prometheus_started", port=os.getenv("WS_FORWARDER_METRICS_PORT", "8082"))
 
@@ -257,11 +418,15 @@ async def _run() -> None:
 
     ws = await _connect_with_backoff()
 
+    send_lock = asyncio.Lock()
+    ack_queue: asyncio.Queue = asyncio.Queue()
+    cmd_queue: asyncio.Queue = asyncio.Queue()
+    learning_user_ids: set = set()
+
+    receiver_task = asyncio.create_task(_ws_receiver(ws, ack_queue, cmd_queue))
+    command_task = asyncio.create_task(_command_handler(cmd_queue, learning_user_ids, ws, send_lock))
+
     while not _shutdown_event.is_set():
-        # ---------------------------------------------------------------
-        # 1. Poll Kafka (non-blocking, run in executor to avoid blocking
-        #    the async loop for too long)
-        # ---------------------------------------------------------------
         msg = await loop.run_in_executor(None, lambda: consumer.poll(timeout=1.0))
         if msg is None:
             continue
@@ -274,16 +439,11 @@ async def _run() -> None:
         raw_value: bytes = msg.value()
         partition = msg.partition()
         offset = msg.offset()
-        # Unique, deterministic event_id derived from Kafka coordinates
-        event_id = f"{partition}:{offset}"
+        event_id = f"{WS_FORWARDER_ENV}-{partition}:{offset}" if WS_FORWARDER_ENV else f"{partition}:{offset}"
 
-        # ---------------------------------------------------------------
-        # 2. Deserialize & scrub PII
-        # ---------------------------------------------------------------
         try:
             payload = json.loads(raw_value)
         except json.JSONDecodeError as exc:
-            # Permanently malformed — route straight to DLQ, commit offset
             await loop.run_in_executor(
                 None, _send_to_dlq, producer, raw_value, f"JSON decode error: {exc}",
             )
@@ -292,10 +452,9 @@ async def _run() -> None:
 
         payload = scrub_pii(payload)
 
-        # ---------------------------------------------------------------
-        # 3. Send-and-Wait with retries
-        #    Offset is committed ONLY after a successful ACK.
-        # ---------------------------------------------------------------
+        if payload.get("base_account_id") in learning_user_ids:
+            payload["mode"] = "learning"
+
         send_attempts = 0
         committed = False
 
@@ -303,12 +462,11 @@ async def _run() -> None:
             send_attempts += 1
             try:
                 with FORWARD_LATENCY.time():
-                    resp = await _send_and_wait_ack(ws, event_id, payload)
+                    resp = await _send_and_wait_ack(ws, send_lock, ack_queue, event_id, payload)
 
                 status = resp.get("status", "").lower()
 
                 if status == "ok":
-                    # --- Happy path: ACK received, safe to commit offset ---
                     await loop.run_in_executor(
                         None, lambda: consumer.commit(asynchronous=False),
                     )
@@ -318,7 +476,6 @@ async def _run() -> None:
                     break
 
                 elif status == "error" and resp.get("error_type") == "malformed_payload":
-                    # --- Server says our payload is bad — DLQ, commit, move on ---
                     await loop.run_in_executor(
                         None,
                         _send_to_dlq,
@@ -333,21 +490,22 @@ async def _run() -> None:
                     break
 
                 else:
-                    # Unexpected status — treat as transient, retry
-                    logger.warning("ws_unexpected_response", event_id=event_id, attempt=send_attempts, max=MAX_SEND_RETRIES, response=resp)
+                    logger.warning("ws_unexpected_response", event_id=event_id, attempt=send_attempts, response=resp)
 
             except asyncio.TimeoutError:
-                # No ACK within deadline — retry the same uncommitted message
                 logger.warning("ack_timeout", event_id=event_id, attempt=send_attempts, max=MAX_SEND_RETRIES)
 
             except websockets.ConnectionClosed as exc:
-                # Connection lost — pause consumption, reconnect, then retry
                 logger.warning("ws_connection_lost", error=str(exc))
+                receiver_task.cancel()
+                command_task.cancel()
                 ws = await _connect_with_backoff()
-                # Do NOT commit — the message will be resent after reconnect
+                send_lock = asyncio.Lock()
+                ack_queue = asyncio.Queue()
+                cmd_queue = asyncio.Queue()
+                receiver_task = asyncio.create_task(_ws_receiver(ws, ack_queue, cmd_queue))
+                command_task = asyncio.create_task(_command_handler(cmd_queue, learning_user_ids, ws, send_lock))
 
-        # If we exhausted retries without committing, DLQ the message so the
-        # consumer is not stuck forever on one bad message.
         if not committed and not _shutdown_event.is_set():
             logger.error("retries_exhausted_routing_to_dlq", event_id=event_id, max_retries=MAX_SEND_RETRIES)
             await loop.run_in_executor(
@@ -365,6 +523,8 @@ async def _run() -> None:
     # Graceful shutdown
     # -------------------------------------------------------------------
     logger.info("ws_forwarder_shutting_down")
+    receiver_task.cancel()
+    command_task.cancel()
     try:
         await ws.close()
     except Exception:
@@ -387,7 +547,7 @@ def main() -> None:
             else structlog.processors.JSONRenderer(),
         ],
         wrapper_class=structlog.make_filtering_bound_logger(
-            int(os.getenv("LOG_LEVEL", "20")),  # 20 = INFO
+            int(os.getenv("LOG_LEVEL", "20")),
         ),
     )
     asyncio.run(_run())

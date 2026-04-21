@@ -342,7 +342,9 @@ def run_batch_scoring_job(settings: DatabaseSettings, start_time: str, end_time:
             
             conn.commit()
             upserted = len(batch_data)
-            log_event(logger, "✅ interest_score_upsert_complete", upserted=upserted)
+            log_event(logger, "✅ interest_score_upsert_complete",
+                      arango_pairs=len(arango_profile_ids), skipped_orphaned=skipped,
+                      upserted=upserted)
 
     except Exception as e:
         conn.rollback()
@@ -359,7 +361,7 @@ def run_garbage_collection(settings: DatabaseSettings):
             cur.execute(query, (SCORE_THRESHOLD,))
             deleted_count = cur.rowcount
         conn.commit()
-        logger.info("🧹 GC: Removed %d rows.", deleted_count)
+        log_event(logger, "🧹 gc_complete", deleted=deleted_count)
     except Exception as e:
         conn.rollback()
         logger.error("❌ GC Failed: %s", e)

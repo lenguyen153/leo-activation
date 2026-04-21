@@ -30,3 +30,8 @@ BACKOFF_MAX: float = 60.0   # cap
 # Ping/Pong keep-alive interval (seconds)
 WS_PING_INTERVAL: float = float(os.getenv("WS_PING_INTERVAL", "20"))
 WS_PING_TIMEOUT: float = float(os.getenv("WS_PING_TIMEOUT", "10"))
+
+# Event ID prefix — prepended to partition:offset to distinguish environments.
+# e.g. WS_FORWARDER_ENV=dev  → event_id = "dev-0:123"
+#      WS_FORWARDER_ENV=prod → event_id = "prod-0:123"
+WS_FORWARDER_ENV: str = os.getenv("WS_FORWARDER_ENV", "")

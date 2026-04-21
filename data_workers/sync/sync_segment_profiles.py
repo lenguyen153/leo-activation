@@ -39,20 +39,20 @@ def _populate_fingerprint_cache(arango_db, segment_id: Optional[str], segment_na
             socket_connect_timeout=5,
         )
 
-        # Build the appropriate AQL filter depending on what's available
+        # Step 1: get fingerprintId → cdp_profile._key for segment members
         if segment_id:
-            query = """
+            profile_q = """
             FOR p IN cdp_profile
                 FILTER @seg IN p.inSegments[*].id
-                FILTER p.fingerprintId != null
+                FILTER p.fingerprintId != null AND p.fingerprintId != ""
                 RETURN { fid: p.fingerprintId, pid: p._key }
             """
             bind_vars = {"seg": segment_id}
         elif segment_name:
-            query = """
+            profile_q = """
             FOR p IN cdp_profile
                 FILTER @seg IN p.inSegments[*].name
-                FILTER p.fingerprintId != null
+                FILTER p.fingerprintId != null AND p.fingerprintId != ""
                 RETURN { fid: p.fingerprintId, pid: p._key }
             """
             bind_vars = {"seg": segment_name}
@@ -60,13 +60,37 @@ def _populate_fingerprint_cache(arango_db, segment_id: Optional[str], segment_na
             logger.warning("No segment filter for fingerprint cache, skipping")
             return
 
-        cursor = arango_db.aql.execute(query, bind_vars=bind_vars)
+        fp_map = {doc["fid"]: doc["pid"] for doc in arango_db.aql.execute(profile_q, bind_vars=bind_vars)}
+        if not fp_map:
+            logger.info("Fingerprint cache: no profiles found for segment")
+            return
+
+        # Step 2: resolve fingerprintId → refProfileId from latest events (batch)
+        resolve_q = """
+        FOR e IN cdp_trackingevent
+            FILTER e.fingerprintId IN @fids
+            FILTER e.refProfileId != null AND e.refProfileId != ""
+            COLLECT fid = e.fingerprintId INTO grp
+            LET latest = FIRST(
+                FOR g IN grp
+                    SORT g.e.createdAt DESC
+                    LIMIT 1
+                    RETURN g.e.refProfileId
+            )
+            RETURN { fid: fid, ref: latest }
+        """
+        ref_map = {
+            doc["fid"]: doc["ref"]
+            for doc in arango_db.aql.execute(resolve_q, bind_vars={"fids": list(fp_map.keys())})
+            if doc.get("ref")
+        }
+
+        # Step 3: merge — prefer refProfileId, fall back to cdp_profile._key
         count = 0
-        for doc in cursor:
-            fid, pid = doc["fid"], doc["pid"]
-            if fid and pid:
-                r.setex(f"fp:{fid}", 86400, pid)
-                count += 1
+        for fid, pid in fp_map.items():
+            resolved = ref_map.get(fid, pid)
+            r.setex(f"fp:{fid}", 86400, resolved)
+            count += 1
         logger.info("Fingerprint cache populated: %d entries (TTL=24h)", count)
     except Exception:
         logger.exception("Failed to populate fingerprint cache (non-fatal)")

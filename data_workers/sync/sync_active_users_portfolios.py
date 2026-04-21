@@ -40,36 +40,16 @@ CUTOFF_DAYS = 30
 # AQL Query — profile_id → account_no (base) lookup from any event carrying account_no
 # --------------------------------------------------
 
-AQL_ACCOUNT_NO_LOOKUP = """
+# Step 1a: latest account_no per fingerprintId — flat scan, no nested subquery
+AQL_ACCOUNT_NO_BY_FP = """
 FOR event IN cdp_trackingevent
     FILTER event.createdAt >= @cutoff
     FILTER HAS(event.eventData, "account_no")
-    FILTER event.eventData.account_no != null
-    FILTER event.eventData.account_no != ""
-
-    LET ref_id = (
-        event.refProfileId != null AND event.refProfileId != ""
-        ? event.refProfileId
-        : event.fingerprintId
-    )
-    FILTER ref_id != null
-
-    COLLECT
-        profile_id = ref_id
-    INTO grp
-
-    LET latest = FIRST(
-        FOR g IN grp
-            SORT g.event.createdAt DESC
-            LIMIT 1
-            RETURN g.event
-    )
-
-    RETURN {
-        profile_id:       profile_id,
-        base_account_id:  latest.eventData.account_no,
-        last_seen:        latest.createdAt
-    }
+    FILTER event.eventData.account_no != null AND event.eventData.account_no != ""
+    FILTER event.fingerprintId != null AND event.fingerprintId != ""
+    COLLECT fid = event.fingerprintId INTO grp
+    LET latest = FIRST(FOR g IN grp SORT g.event.createdAt DESC LIMIT 1 RETURN g.event)
+    RETURN { fid: fid, account_no: latest.eventData.account_no, last_seen: latest.createdAt }
 """
 
 # --------------------------------------------------
@@ -77,37 +57,22 @@ FOR event IN cdp_trackingevent
 # Provides specific account_id (with suffix) + financial property fields.
 # --------------------------------------------------
 
+# Step 2a: latest asset-detail-view per account_id — returns fingerprintId, resolved in Python
 AQL_ASSET_DETAIL_VIEWS = """
 FOR event IN cdp_trackingevent
     FILTER event.metricName == "asset-detail-view"
     FILTER event.createdAt >= @cutoff
     FILTER HAS(event.eventData, "current_account_id")
-    FILTER event.eventData.current_account_id != null
-    FILTER event.eventData.current_account_id != ""
-
+    FILTER event.eventData.current_account_id != null AND event.eventData.current_account_id != ""
+    FILTER event.fingerprintId != null AND event.fingerprintId != ""
     SORT event.createdAt DESC
-
-    COLLECT
-        account_id = event.eventData.current_account_id
-    INTO grp
-
-    LET latest_event = FIRST(
-        FOR g IN grp
-            SORT g.event.createdAt DESC
-            LIMIT 1
-            RETURN g.event
-    )
+    COLLECT account_id = event.eventData.current_account_id INTO grp
+    LET latest_event = FIRST(FOR g IN grp SORT g.event.createdAt DESC LIMIT 1 RETURN g.event)
     LET latest = latest_event.eventData
-    LET ref_id  = (
-        latest_event.refProfileId != null AND latest_event.refProfileId != ""
-        ? latest_event.refProfileId
-        : latest_event.fingerprintId
-    )
-
     RETURN {
         account_id:       account_id,
+        fingerprint_id:   latest_event.fingerprintId,
         base_account_id:  latest.account_no,
-        profile_id:       ref_id,
         nav:              latest.nav,
         cash_total:       latest.cash_total,
         debt_total:       latest.debt_total,
@@ -119,6 +84,24 @@ FOR event IN cdp_trackingevent
         asset_allocation: latest.asset_allocation,
         last_seen:        grp[0].event.createdAt
     }
+"""
+
+# Shared: resolve fingerprintId → refProfileId (batch, flat scan)
+AQL_RESOLVE_REF_PROFILE = """
+FOR e IN cdp_trackingevent
+    FILTER e.fingerprintId IN @fids
+    FILTER e.refProfileId != null AND e.refProfileId != ""
+    COLLECT fid = e.fingerprintId INTO grp
+    LET latest = FIRST(FOR g IN grp SORT g.e.createdAt DESC LIMIT 1 RETURN g.e.refProfileId)
+    RETURN { fid: fid, ref: latest }
+"""
+
+# Shared: fallback fingerprintId → cdp_profile._key (batch)
+AQL_FALLBACK_PROFILE_KEY = """
+FOR p IN cdp_profile
+    FILTER p.fingerprintId IN @fids
+    FILTER p.fingerprintId != null AND p.fingerprintId != ""
+    RETURN { fid: p.fingerprintId, pid: p._key }
 """
 
 # --------------------------------------------------
@@ -395,19 +378,56 @@ def sync_active_users_portfolios(
         tenant_uuid, _ = resolve_ids(conn, tenant_name, segment_name)
         tenant_id = str(tenant_uuid)
 
-        # 2. Extract from ArangoDB (createdAt is ISO 8601 string)
+        # 2. Extract from ArangoDB using flat queries + Python-side resolution
         cutoff = (datetime.now(timezone.utc) - timedelta(days=CUTOFF_DAYS)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
         db = settings.get_arango_db()
 
-        account_no_rows = list(db.aql.execute(AQL_ACCOUNT_NO_LOOKUP, bind_vars={"cutoff": cutoff}))
-        logger.info("Fetched %d account_no lookup rows from ArangoDB", len(account_no_rows))
+        # 2a. account_no events: fingerprintId → latest account_no
+        fp_account_rows = list(db.aql.execute(AQL_ACCOUNT_NO_BY_FP, bind_vars={"cutoff": cutoff}))
+        logger.info("Fetched %d account_no fingerprint rows from ArangoDB", len(fp_account_rows))
 
-        detail_events = list(db.aql.execute(AQL_ASSET_DETAIL_VIEWS, bind_vars={"cutoff": cutoff}))
-        logger.info("Fetched %d asset-detail-view rows from ArangoDB", len(detail_events))
+        # 2b. asset-detail-view events (returns fingerprint_id, resolved below)
+        raw_detail_events = list(db.aql.execute(AQL_ASSET_DETAIL_VIEWS, bind_vars={"cutoff": cutoff}))
+        logger.info("Fetched %d asset-detail-view rows from ArangoDB", len(raw_detail_events))
 
-        if not account_no_rows and not detail_events:
+        if not fp_account_rows and not raw_detail_events:
             logger.info("No events found. Nothing to sync.")
             return {"portfolios": 0, "holdings": 0, "profiles_updated": 0, "skipped": 0}
+
+        # 2c. Collect all unique fingerprints needing resolution
+        all_fids = list({r["fid"] for r in fp_account_rows} | {e["fingerprint_id"] for e in raw_detail_events})
+
+        # 2d. Batch resolve: fingerprintId → refProfileId (preferred) or cdp_profile._key (fallback)
+        ref_map = {
+            doc["fid"]: doc["ref"]
+            for doc in db.aql.execute(AQL_RESOLVE_REF_PROFILE, bind_vars={"fids": all_fids})
+            if doc.get("ref")
+        }
+        fallback_map = {
+            doc["fid"]: doc["pid"]
+            for doc in db.aql.execute(AQL_FALLBACK_PROFILE_KEY, bind_vars={"fids": all_fids})
+        }
+
+        def resolve_profile(fid: str) -> str | None:
+            return ref_map.get(fid) or fallback_map.get(fid)
+
+        # 2e. Build account_no_rows with resolved profile_id
+        account_no_rows = [
+            {
+                "profile_id": resolve_profile(r["fid"]),
+                "base_account_id": r["account_no"],
+                "last_seen": r["last_seen"],
+            }
+            for r in fp_account_rows
+            if resolve_profile(r["fid"])
+        ]
+
+        # 2f. Attach resolved profile_id to detail events
+        detail_events = [
+            {**e, "profile_id": resolve_profile(e["fingerprint_id"])}
+            for e in raw_detail_events
+            if resolve_profile(e["fingerprint_id"])
+        ]
 
         base_by_pid = {
             r["profile_id"]: r["base_account_id"]
