@@ -2,9 +2,8 @@
 Market Snapshot Poller
 ======================
 Every 15 minutes:
-  1. Discover tickers that appear in any profile's ticker-view / order-preview
-     events over the last 7 days (ArangoDB).
-  2. Fetch current market info for each ticker from the internal market API.
+  1. Load every ticker from the `instruments` table (full VN exchange universe).
+  2. Fetch current market data from the internal Redis cache (key: latest:{SYMBOL}).
   3. Upsert into `market_snapshot` (current state).
   4. Insert into `market_snapshot_history` (append-only, used to look up
      price at the time a user viewed a ticker).
@@ -13,11 +12,11 @@ Run:
   python -m data_workers.scripts.poll_market_snapshot
 """
 
+import json
 import os
 import time
-from datetime import datetime, timedelta, timezone
 
-import httpx
+import redis as redis_lib
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -28,15 +27,16 @@ from data_utils.settings import DatabaseSettings
 configure_logging()
 logger = get_logger(__name__)
 
-MARKET_API_URL = os.getenv(
-    "MARKET_API_URL",
-    "http://172.60.1.2:8889/api/market/info",
-)
-HTTP_TIMEOUT = int(os.getenv("MARKET_API_TIMEOUT", "10"))
-# Batch throttle: pause HTTP_BATCH_PAUSE_MS after every HTTP_BATCH_SIZE calls.
-# Default: sleep 1s every 50 calls. Set HTTP_BATCH_PAUSE_MS=0 to disable.
-HTTP_BATCH_SIZE = int(os.getenv("MARKET_API_BATCH_SIZE", "50"))
-HTTP_BATCH_PAUSE_MS = int(os.getenv("MARKET_API_BATCH_PAUSE_MS", "1000"))
+# Market data Redis — separate from the campaign-engine/frequency-cap Redis (REDIS_URL).
+MARKET_REDIS_HOST = os.getenv("MARKET_REDIS_HOST", "172.60.1.4")
+MARKET_REDIS_PORT = int(os.getenv("MARKET_REDIS_PORT", "6379"))
+MARKET_REDIS_DB = int(os.getenv("MARKET_REDIS_DB", "0"))
+MARKET_REDIS_PASSWORD = os.getenv("MARKET_REDIS_PASSWORD", "")
+
+# Batch throttle: pause MARKET_BATCH_PAUSE_MS after every MARKET_BATCH_SIZE reads.
+# Redis is fast — default 0 (no pause). Raise if the market Redis shows load issues.
+MARKET_BATCH_SIZE = int(os.getenv("MARKET_API_BATCH_SIZE", "50"))
+MARKET_BATCH_PAUSE_MS = int(os.getenv("MARKET_API_BATCH_PAUSE_MS", "0"))
 
 
 def _load_all_tickers(conn) -> list[str]:
@@ -59,51 +59,33 @@ def _load_all_tickers(conn) -> list[str]:
         return [r["symbol"] for r in cur.fetchall() if r["symbol"]]
 
 
-def _fetch_market_info(client: httpx.Client, ticker: str) -> tuple[dict | None, object]:
+def _fetch_market_info(redis_client: redis_lib.Redis, ticker: str) -> tuple[dict | None, object]:
     """
-    Call the internal market API. Returns (row, raw_payload).
-    row is the first result dict or None; raw_payload is the raw response
-    (useful for debugging why we got no row).
+    Read the latest market snapshot for a ticker from Redis (key: latest:{ticker}).
+    Returns (row_dict, raw_str). row is None when the key is absent or unparseable.
     """
-    try:
-        resp = client.get(
-            MARKET_API_URL,
-            params={
-                "mode": "now",
-                "target_type": "symbol",
-                "ticket": ticker,
-                "limit": 1,
-            },
-        )
-        resp.raise_for_status()
-        data = resp.json()
-    except Exception as e:
-        logger.warning("API call failed for %s: %s", ticker, e)
+    raw = redis_client.get(f"latest:{ticker}")
+    if not raw:
         return None, None
-
-    # The API may wrap results in a list or a "data" key — tolerate both.
-    if isinstance(data, dict) and "data" in data:
-        rows = data["data"]
-    elif isinstance(data, list):
-        rows = data
-    else:
-        rows = [data]
-
-    if not rows:
-        return None, data
-    first = rows[0] if isinstance(rows[0], dict) else None
-    return first, data
+    try:
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            return None, raw
+        return data, raw
+    except (json.JSONDecodeError, TypeError) as e:
+        logger.warning("Redis parse failed for %s: %s", ticker, e)
+        return None, raw
 
 
 def _extract_fields(row: dict) -> dict:
     """
-    Map the market API response to our schema.
+    Map the Redis market snapshot to our schema.
 
-    Real API shape: {"content": {"CurrentPrice": ..., "ReferencePrice": ..., ...}}
+    Redis key latest:{SYMBOL} shape: {"CurrentPrice": ..., "ReferencePrice": ..., ...}
     - CurrentPrice = 0 when the stock hasn't traded today yet
     - ReferencePrice = previous session close (always set for listed tickers)
     - AccumulatedVolume = cumulative daily volume
-    - PercentChange = already computed by the API
+    - PercentChange = already computed by the data source
     """
     content = row.get("content") if isinstance(row.get("content"), dict) else row
 
@@ -236,6 +218,22 @@ def run():
     settings = DatabaseSettings()
     conn = settings.get_pg_connection()
 
+    try:
+        market_redis = redis_lib.Redis(
+            host=MARKET_REDIS_HOST,
+            port=MARKET_REDIS_PORT,
+            db=MARKET_REDIS_DB,
+            password=MARKET_REDIS_PASSWORD or None,
+            socket_connect_timeout=5,
+            decode_responses=True,
+        )
+        market_redis.ping()
+        logger.info("Connected to market Redis at %s:%s/db%s", MARKET_REDIS_HOST, MARKET_REDIS_PORT, MARKET_REDIS_DB)
+    except Exception as e:
+        logger.error("Cannot connect to market Redis: %s", e)
+        conn.close()
+        return
+
     logger.info("Loading full ticker universe from instruments table...")
     tickers = _load_all_tickers(conn)
     logger.info("Found %d tickers to poll", len(tickers))
@@ -247,44 +245,41 @@ def run():
     logged_no_price_sample = False
     logged_empty_sample = False
 
-    batch_pause_s = HTTP_BATCH_PAUSE_MS / 1000.0
+    batch_pause_s = MARKET_BATCH_PAUSE_MS / 100.0
 
-    # Re-use one HTTP client for the whole poll so connections are pooled and
-    # we don't exhaust local/ephemeral TCP ports.
-    with httpx.Client(timeout=HTTP_TIMEOUT) as client:
-        for idx, symbol in enumerate(tickers):
-            row, raw = _fetch_market_info(client, symbol)
-            # Batch throttle: sleep every HTTP_BATCH_SIZE calls (not on the last one).
-            if (
-                batch_pause_s > 0
-                and HTTP_BATCH_SIZE > 0
-                and (idx + 1) % HTTP_BATCH_SIZE == 0
-                and (idx + 1) < len(tickers)
-            ):
-                time.sleep(batch_pause_s)
-            if not row:
-                skipped_no_row += 1
-                if not logged_empty_sample:
-                    logger.info("Sample empty-row payload for %s: %s", symbol, raw)
-                    logged_empty_sample = True
-                continue
-            if not logged_ok_sample:
-                logger.info("Sample OK row for %s: %s", symbol, row)
-                logged_ok_sample = True
-            fields = _extract_fields(row)
-            if fields["price"] is None:
-                if not logged_no_price_sample:
-                    logger.info("Sample no-price row for %s: %s", symbol, row)
-                    logged_no_price_sample = True
-                skipped_no_price += 1
-                continue
-            try:
-                _upsert_snapshot(conn, symbol, fields)
-                polled += 1
-            except Exception as e:
-                logger.error("DB upsert failed for %s: %s", symbol, e)
-                conn.rollback()
-                continue
+    for idx, symbol in enumerate(tickers):
+        row, raw = _fetch_market_info(market_redis, symbol)
+        # Batch throttle (configurable via env; default 0 = no pause for Redis).
+        if (
+            batch_pause_s > 0
+            and MARKET_BATCH_SIZE > 0
+            and (idx + 1) % MARKET_BATCH_SIZE == 0
+            and (idx + 1) < len(tickers)
+        ):
+            time.sleep(batch_pause_s)
+        if not row:
+            skipped_no_row += 1
+            if not logged_empty_sample:
+                logger.info("Sample missing-key for %s: raw=%s", symbol, raw)
+                logged_empty_sample = True
+            continue
+        if not logged_ok_sample:
+            logger.info("Sample OK row for %s: %s", symbol, row)
+            logged_ok_sample = True
+        fields = _extract_fields(row)
+        if fields["price"] is None:
+            if not logged_no_price_sample:
+                logger.info("Sample no-price row for %s: %s", symbol, row)
+                logged_no_price_sample = True
+            skipped_no_price += 1
+            continue
+        try:
+            _upsert_snapshot(conn, symbol, fields)
+            polled += 1
+        except Exception as e:
+            logger.error("DB upsert failed for %s: %s", symbol, e)
+            conn.rollback()
+            continue
 
     conn.commit()
 
@@ -293,9 +288,19 @@ def run():
 
     # Compute volume analytics from accumulated history
     updated_vol = _compute_volume_analytics(conn)
+
+    # Purge rows older than 35 days (30d needed for avg_30d_volume + 5d buffer).
+    with conn.cursor() as cur:
+        cur.execute(
+            "DELETE FROM market_snapshot_history WHERE snapshot_at < NOW() - INTERVAL '35 days'"
+        )
+        purged = cur.rowcount
+
     conn.commit()
     conn.close()
     log_event(logger, "volume_analytics_updated", symbols=updated_vol)
+    if purged:
+        log_event(logger, "market_history_purged", rows=purged)
 
 
 if __name__ == "__main__":
