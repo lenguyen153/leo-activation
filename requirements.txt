@@ -13,15 +13,15 @@ uvicorn
 # ASGI server to run FastAPI
 # Handles async IO, WebSockets, and high concurrency
 
-transformers
+# transformers
 # Hugging Face library for LLMs and NLP models
 # Used for local inference, embeddings, or model experimentation
 
-torch
+# torch
 # PyTorch backend required by transformers
 # Provides tensor computation and GPU acceleration
 
-huggingface_hub
+# huggingface_hub
 # Access models, tokenizers, and configs from Hugging Face Hub
 # Handles authentication and model versioning
 
@@ -39,19 +39,19 @@ pydantic[email]
 # Data validation and settings management
 # Email utilities for user notifications and alerts
 
-accelerate
+# accelerate
 # Hugging Face utility for efficient model loading and inference
 # Helps with multi-GPU, mixed precision, and memory optimization
 
-sentence-transformers
+# sentence-transformers
 # Library for generating sentence and text embeddings
 # Used for semantic search, clustering, and similarity tasks
 
-google-genai
+# google-genai
 # Google Gemini SDK (latest)
 # Used for LLM reasoning, function calling, and embeddings
 
-openai
+# openai
 # OpenAI API client
 # Used for GPT-4, GPT-3.5, embeddings, and other OpenAI services
 
@@ -59,7 +59,7 @@ psycopg[binary]
 # PostgreSQL driver (psycopg v3)
 # High-performance, async-friendly DB access
 
-pgvector
+# pgvector
 # PostgreSQL extension client for vector embeddings
 # Enables semantic search and similarity queries in Postgres
 

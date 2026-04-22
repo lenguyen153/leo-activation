@@ -104,12 +104,27 @@ leo-activation/
 ```
 
 ### Key API Endpoints
+- `GET /ping` — Health check
 - `POST /chat` — Main agentic interface (natural language → tool → response)
 - `POST /tool_calling` — Direct tool invocation (bypasses agent)
 - `POST /data/sync-segment` — Trigger profile sync from ArangoDB
-- `GET /recommendations/nba` / `/nla` — Next-best-action recommendations
-- `GET/POST /alerts/...` — Alert management
-- `POST /zalo/webhook` — Zalo OA webhook receiver
+- `GET /recommendation/interested/{ticker}` — Users interested in a ticker
+- `GET /recommendation/profile_affinity/{profile_id}` — 360° profile interest view
+- `GET /recommendation/nba/{profile_id}` — Next-best-action recommendations
+- `GET /recommendation/nla/{profile_id}` — Next-likely-action predictions
+- `POST /recommendation/webhook/zalo` — Zalo OA webhook receiver
+- `GET /portfolio/user` — User portfolio data
+- `GET /portfolio/accounts` — Account-level portfolio data
+- `POST /notification/send` — Send a notification via configured channel
+- `GET /user-events/top` — Top-K events for a profile
+- `GET /user-events/top-range` — Top-K events within a date range
+- `GET /user-events/metric-timestamps` — Event metric timestamps (with optional `instrument_id` filter)
+- `POST /campaigns/rules` — Create campaign rule
+- `GET /campaigns/rules` / `GET /campaigns/rules/{rule_id}` — List / fetch rules
+- `PUT /campaigns/rules/{rule_id}` — Update rule
+- `PATCH /campaigns/rules/{rule_id}/status` — Enable / disable rule
+- `GET /campaigns/rules/{rule_id}/runs` — Execution history for a rule
+- `POST /campaigns/rules/{rule_id}/preview` — Dry-run a rule against audience
 
 ---
 
