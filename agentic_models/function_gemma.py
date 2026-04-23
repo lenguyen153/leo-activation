@@ -1,12 +1,17 @@
 import os
 import threading
 import re
-import torch
 import logging
-from transformers import AutoTokenizer, AutoModelForCausalLM
-from huggingface_hub import login
 from agentic_models.base import BaseLLMEngine
 from main_configs import GEMMA_FUNCTION_MODEL_ID, HUGGINGFACE_TOKEN
+
+try:
+    import torch
+    from transformers import AutoTokenizer, AutoModelForCausalLM
+    from huggingface_hub import login
+    _AI_AVAILABLE = True
+except ImportError:
+    _AI_AVAILABLE = False
 
 # Setup Logging
 logger = logging.getLogger(__name__)
@@ -30,9 +35,11 @@ def ensure_hf_login():
 
 class FunctionGemmaEngine(BaseLLMEngine):
     def __init__(self, model_id: str = GEMMA_FUNCTION_MODEL_ID):
+        if not _AI_AVAILABLE:
+            raise RuntimeError("torch/transformers/huggingface_hub are not installed. AI features are disabled.")
         super().__init__()
         self.model_id = model_id
-        
+
         ensure_hf_login()
 
         logger.info(f"Loading FunctionGemma model: {self.model_id}")

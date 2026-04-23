@@ -52,8 +52,19 @@ class AgentRouter:
 
     def __init__(self, mode: str = "auto"):
         self.mode = mode
-        self.gemma = FunctionGemmaEngine()
-        self.gemini = GeminiEngine()
+        try:
+            self.gemma = FunctionGemmaEngine()
+        except RuntimeError as e:
+            logger.warning(f"FunctionGemmaEngine unavailable: {e}")
+            self.gemma = None
+        try:
+            self.gemini = GeminiEngine()
+        except RuntimeError as e:
+            logger.warning(f"GeminiEngine unavailable: {e}")
+            self.gemini = None
+
+    def _ai_unavailable_response(self) -> Dict[str, Any]:
+        return {"answer": "AI features are not available (packages not installed).", "debug": {"calls": [], "data": []}}
 
     def handle_tool_calling(
         self,
@@ -61,18 +72,8 @@ class AgentRouter:
         tools: Optional[List[Any]] = None,
         tools_map: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """
-        Directly executes a specific tool call and synthesizes the result via Gemini.
-        Bypasses the intent detection (Gemma) step.
-
-        Args:
-            tool_calling_json: Dict like {"tool_name": "...", "args": {...}}
-            tools: List of tool definitions (optional, for compatibility)
-            tools_map: Mapping of tool names to functions
-
-        Returns:
-            Dict matching the standard response format: {'answer': ..., 'debug': ...}
-        """
+        if not self.gemini:
+            return self._ai_unavailable_response()
         tools_map = tools_map or {}
         
         tool_name = tool_calling_json.get("tool_name")
@@ -131,12 +132,13 @@ class AgentRouter:
         }
 
     def handle_message(
-        self, 
-        messages: List[Dict[str, Any]], 
-        tools: Optional[List[Any]] = None, 
-        tools_map: Optional[Dict[str, Any]] = None
+        self,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Any]] = None,
+        tools_map: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        
+        if not self.gemma or not self.gemini:
+            return self._ai_unavailable_response()
         tools_map = tools_map or {}
         
         # --- STEP 1: PREPARE FOR ROUTING (FunctionGemma) ---

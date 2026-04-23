@@ -507,7 +507,7 @@ if __name__ == "__main__":
     # 2. Calculate Window
     now = datetime.datetime.now(datetime.timezone.utc)
     window_end = now.replace(minute=0, second=0, microsecond=0)
-    window_start = window_end - datetime.timedelta(hours=1)
+    window_start = window_end - datetime.timedelta(hours=24)
 
     start_str = window_start.isoformat()
     end_str = window_end.isoformat()

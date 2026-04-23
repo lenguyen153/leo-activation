@@ -71,7 +71,10 @@ def create_app() -> FastAPI:
         )
 
     if templates_dir.exists():
-        app.state.templates = Jinja2Templates(directory=templates_dir)
+        try:
+            app.state.templates = Jinja2Templates(directory=templates_dir)
+        except (AssertionError, Exception):
+            app.state.templates = None
     else:
         app.state.templates = None
 

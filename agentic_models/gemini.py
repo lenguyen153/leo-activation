@@ -6,9 +6,14 @@ import os
 from typing import List, Dict, Any, Optional
 
 import redis
-from google import genai
-from google.genai import types
-from google.genai.errors import APIError
+
+try:
+    from google import genai
+    from google.genai import types
+    from google.genai.errors import APIError
+    _GEMINI_AVAILABLE = True
+except ImportError:
+    _GEMINI_AVAILABLE = False
 
 from main_configs import GEMINI_MODEL_ID, GEMINI_API_KEY, REDIS_URL
 
@@ -43,6 +48,8 @@ class GeminiEngine:
         model_name: str = GEMINI_MODEL_ID,
         api_key: str = GEMINI_API_KEY,
     ):
+        if not _GEMINI_AVAILABLE:
+            raise RuntimeError("google-genai is not installed. AI features are disabled.")
         if not model_name or not api_key:
             raise ValueError("Gemini API key or model name missing")
 
@@ -109,7 +116,7 @@ class GeminiEngine:
     # ============================================================
     # Parsing & Conversion
     # ============================================================
-    def _parse_custom_tool_call(self, text_content: str) -> Optional[types.Part]:
+    def _parse_custom_tool_call(self, text_content: str) -> Optional[Any]:
         """Parses your custom <start_function_call> string format."""
         pattern = r"<start_function_call>call:(?P<name>[\w_]+)\{(?P<args>.*)\}<end_function_call>"
         match = re.search(pattern, text_content)
@@ -129,7 +136,7 @@ class GeminiEngine:
             return types.Part.from_function_call(name=fn_name, args=args_dict)
         return None
 
-    def _convert_messages(self, messages: List[Dict[str, Any]]) -> tuple[List[types.Content], Optional[str]]:
+    def _convert_messages(self, messages: List[Dict[str, Any]]) -> tuple[List[Any], Optional[str]]:
         contents: List[types.Content] = []
         
         # Start with the DEFAULT instruction to ensure insights/persona

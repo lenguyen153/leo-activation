@@ -25,6 +25,12 @@ uvicorn
 # Access models, tokenizers, and configs from Hugging Face Hub
 # Handles authentication and model versioning
 
+jinja2
+# Template engine used for alert rendering and channel message templates
+
+httpx
+# Async HTTP client used by notification and campaign dispatcher
+
 python-dotenv
 # Loads environment variables from .env files
 # Keeps secrets and configs out of source code
@@ -59,7 +65,7 @@ psycopg[binary]
 # PostgreSQL driver (psycopg v3)
 # High-performance, async-friendly DB access
 
-# pgvector
+pgvector
 # PostgreSQL extension client for vector embeddings
 # Enables semantic search and similarity queries in Postgres
 

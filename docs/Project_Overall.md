@@ -37,7 +37,7 @@
 - OpenAI SDK — available as alternate LLM provider
 - `sentence-transformers` — 1536-dim embeddings for PGVector semantic search
 
-**Task Queue:** Celery with Redis broker (worker + beat for cron jobs)
+**Task Queue:** Celery with Redis broker (worker + beat for cron jobs); supports `CELERY_CDC_ONLY` mode that disables all non-CDC tasks for isolated scoring pipelines
 
 **Event Streaming:** Confluent Kafka (CDC poller → scoring consumer → NBA publisher)
 
@@ -88,12 +88,19 @@ leo-activation/
 │   └── *.py                     # Domain tools (customer, marketing, alerts, weather)
 ├── data_models/                 # SQLAlchemy ORM models & Pydantic schemas
 ├── data_utils/                  # DB connection factory & settings
+├── agentic_resources/           # Static files and Jinja2 web templates (served at /resources)
 ├── data_services/               # Business logic services (alerts)
-├── data_workers/                # Celery tasks (profile sync, embeddings)
+├── data_workers/                # Celery tasks and background workers
+│   ├── tasks.py                 # All registered Celery tasks
+│   ├── campaign_engine/         # Rule-based campaign engine (circuit breaker, dispatcher, frequency cap)
+│   ├── repositories/            # Data-access layer (Arango + PG profile repos)
+│   ├── scripts/                 # One-off / maintenance scripts (backfill, batch scoring, etc.)
+│   └── sync/                    # Profile & portfolio sync services
 ├── services/                    # CDC microservices (independent containers)
 │   ├── cdc_poller/              # Polls ArangoDB for changes → Kafka
 │   ├── scoring_consumer/        # Consumes Kafka → computes scores → PG
 │   ├── nba_publisher/           # Next-Best-Action publisher
+│   ├── ws_forwarder/            # WebSocket forwarder — streams CDC events to external services
 │   └── shared/                  # Shared Kafka utils & schemas
 ├── sql-scripts/                 # DDL schema, test data, use cases
 ├── scripts/                     # One-off maintenance scripts
