@@ -783,10 +783,13 @@ BEGIN
 END $$;
 
 -- Indexes for Analytics & AI Training
-CREATE INDEX IF NOT EXISTS idx_behavioral_profile_time 
+CREATE UNIQUE INDEX IF NOT EXISTS idx_behavioral_events_event_id
+    ON behavioral_events (event_id, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_behavioral_profile_time
     ON behavioral_events (profile_id, created_at DESC);
 
-CREATE INDEX IF NOT EXISTS idx_behavioral_entity 
+CREATE INDEX IF NOT EXISTS idx_behavioral_entity
     ON behavioral_events (entity_type, entity_id);
 
 -- RLS

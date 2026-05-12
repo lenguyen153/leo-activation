@@ -201,6 +201,14 @@ services:
         condition: service_completed_successfully
     restart: unless-stopped
 
+  dashboard:
+    build:
+      context: ./leo-dashboard
+    container_name: my_dashboard
+    ports:
+      - "5173:80"
+    restart: unless-stopped
+
 volumes:
   zookeeper_data:
   zookeeper_log:
