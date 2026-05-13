@@ -103,8 +103,9 @@ def _get_arango_db():
 
 
 def _get_pg_connection() -> psycopg.Connection:
+    """Uses the production DB — this module is read-only (event queries)."""
     settings = DatabaseSettings()
-    return settings.get_pg_connection()
+    return settings.get_pg_connection_prod()
 
 
 def _resolve_profile_ids_by_email(email: str) -> List[str]:

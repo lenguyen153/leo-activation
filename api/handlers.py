@@ -32,6 +32,7 @@ from api.portfolio import router as portfolio_router
 from api.notification import router as notification_router
 from api.user_events import router as user_events_router
 from api.campaign_rules import router as campaign_rules_router
+from api.audience import router as audience_router
 from fastapi.responses import FileResponse
 
 # --- DB UTILS ---
@@ -146,6 +147,7 @@ def create_api_router(agent_router: AgentRouter) -> APIRouter:
     router.include_router(notification_router)
     router.include_router(user_events_router)
     router.include_router(campaign_rules_router)
+    router.include_router(audience_router)
 
     # --------------------------------------------------------
     # 1. Tool Calling

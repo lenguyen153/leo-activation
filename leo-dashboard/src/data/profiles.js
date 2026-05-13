@@ -7,9 +7,14 @@ export const PROFILES = {
     joined: '2023-04-12',
     stats: { events: 312, session: '4m 22s', conv: '18.4%', ltv: '$4,280' },
     nba: [
-      { id: 1, action: 'Send Stock Alert',   ticker: 'VNM', conf: 0.92, channel: 'Email',    pri: 'High' },
-      { id: 2, action: 'Promote LEO Fund A', ticker: null,  conf: 0.87, channel: 'Zalo',     pri: 'High' },
-      { id: 3, action: 'Re-engagement Push', ticker: null,  conf: 0.74, channel: 'Push',     pri: 'Medium' },
+      { id: 1, action: 'Send Stock Alert',   ticker: 'VNM', conf: 0.92, channel: 'Email',    pri: 'High',   reason: 'Highest interest score + recent page views' },
+      { id: 2, action: 'Promote LEO Fund A', ticker: null,  conf: 0.87, channel: 'Zalo',     pri: 'High',   reason: 'Fund affinity detected from search history' },
+      { id: 3, action: 'Re-engagement Push', ticker: null,  conf: 0.74, channel: 'Push',     pri: 'Medium', reason: 'Session gap > 5 days' },
+    ],
+    nla: [
+      { id: 1, action: 'ticker-view',   ticker: 'VNM', conf: 0.88 },
+      { id: 2, action: 'search',        ticker: null,  conf: 0.76 },
+      { id: 3, action: 'watchlist-add', ticker: 'VCB', conf: 0.61 },
     ],
     interests: [
       { tk: 'VNM', score: 0.93 }, { tk: 'HPG', score: 0.87 },
@@ -33,8 +38,12 @@ export const PROFILES = {
     joined: '2026-05-01',
     stats: { events: 12, session: '7m 01s', conv: '0%', ltv: '$0' },
     nba: [
-      { id: 1, action: 'Onboarding Welcome Email', ticker: null, conf: 0.96, channel: 'Email', pri: 'High' },
-      { id: 2, action: 'Tutorial Nudge',           ticker: null, conf: 0.88, channel: 'Push',  pri: 'High' },
+      { id: 1, action: 'Onboarding Welcome Email', ticker: null, conf: 0.96, channel: 'Email', pri: 'High', reason: 'Day 1 new user — highest engagement window' },
+      { id: 2, action: 'Tutorial Nudge',           ticker: null, conf: 0.88, channel: 'Push',  pri: 'High', reason: 'No completed trades yet; tutorial completion increases LTV' },
+    ],
+    nla: [
+      { id: 1, action: 'ticker-view',  ticker: 'VCB', conf: 0.91 },
+      { id: 2, action: 'search',       ticker: null,  conf: 0.80 },
     ],
     interests: [
       { tk: 'VCB', score: 0.55 }, { tk: 'BID', score: 0.48 },
@@ -52,10 +61,15 @@ export const PROFILES = {
     joined: '2022-11-08',
     stats: { events: 1240, session: '12m 45s', conv: '42.1%', ltv: '$28,600' },
     nba: [
-      { id: 1, action: 'Flash Sale Alert',      ticker: 'HPG', conf: 0.94, channel: 'Zalo',     pri: 'High' },
-      { id: 2, action: 'Premium Tier Upsell',   ticker: null,  conf: 0.82, channel: 'Email',    pri: 'Medium' },
-      { id: 3, action: 'Daily Briefing Push',   ticker: null,  conf: 0.79, channel: 'Push',     pri: 'Medium' },
-      { id: 4, action: 'Facebook Re-targeting', ticker: null,  conf: 0.65, channel: 'Facebook', pri: 'Low' },
+      { id: 1, action: 'Flash Sale Alert',      ticker: 'HPG', conf: 0.94, channel: 'Zalo',     pri: 'High',   reason: 'HPG price movement detected; user placed orders 3× in 7 days' },
+      { id: 2, action: 'Premium Tier Upsell',   ticker: null,  conf: 0.82, channel: 'Email',    pri: 'Medium', reason: 'Trade volume exceeds Premium threshold for 2 consecutive months' },
+      { id: 3, action: 'Daily Briefing Push',   ticker: null,  conf: 0.79, channel: 'Push',     pri: 'Medium', reason: 'Consistent morning login pattern detected' },
+      { id: 4, action: 'Facebook Re-targeting', ticker: null,  conf: 0.65, channel: 'Facebook', pri: 'Low',    reason: 'Inactive on web for 3+ days' },
+    ],
+    nla: [
+      { id: 1, action: 'order-created',  ticker: 'HPG', conf: 0.91 },
+      { id: 2, action: 'ticker-view',    ticker: 'VNM', conf: 0.79 },
+      { id: 3, action: 'watchlist-view', ticker: null,  conf: 0.65 },
     ],
     interests: [
       { tk: 'HPG', score: 0.97 }, { tk: 'VNM', score: 0.88 },

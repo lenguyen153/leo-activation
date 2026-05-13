@@ -1,0 +1,872 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LEO Activation Dashboard</title>
+  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    /* ===== CSS VARIABLES ===== */
+    :root {
+      --bg:       #0b0f19;
+      --s1:       #161d2e;
+      --s2:       #1e2840;
+      --s3:       #253050;
+      --bdr:      rgba(148,163,184,.1);
+      --bdr2:     rgba(148,163,184,.18);
+      --pri:      #6366f1;
+      --pri-g:    rgba(99,102,241,.14);
+      --sec:      #22d3ee;
+      --ok:       #22c55e;
+      --warn:     #f59e0b;
+      --err:      #ef4444;
+      --pur:      #a855f7;
+      --tx:       #f1f5f9;
+      --tx-sub:   #94a3b8;
+      --tx-dim:   #475569;
+      --r:        8px;  --r-lg: 12px; --r-xl: 16px; --r-f: 9999px;
+      --p1: 4px;  --p2: 8px;  --p3: 12px; --p4: 16px;
+      --p5: 20px; --p6: 24px; --p8: 32px;
+      --fs-xs: 11px; --fs-sm: 13px; --fs-base: 14px;
+      --fs-md: 15px;  --fs-lg: 18px; --fs-xl: 22px;
+      --fw-n: 400; --fw-m: 500; --fw-sb: 600; --fw-b: 700;
+      --ease: .15s ease;
+      --shd: 0 4px 20px rgba(0,0,0,.45);
+    }
+
+    /* ===== RESET ===== */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body, #root { height: 100%; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif;
+      background: var(--bg); color: var(--tx); font-size: var(--fs-base); line-height: 1.5; }
+    ::-webkit-scrollbar { width: 4px; height: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--s3); border-radius: var(--r-f); }
+    ::-webkit-scrollbar-thumb:hover { background: var(--tx-dim); }
+
+    /* ===== LAYOUT ===== */
+    .app         { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+    .hdr         { display: flex; align-items: center; justify-content: space-between;
+                   padding: 0 var(--p6); height: 54px; background: var(--s1);
+                   border-bottom: 1px solid var(--bdr); flex-shrink: 0; }
+    .main-wrap   { display: flex; flex: 1; overflow: hidden; }
+    .canvas      { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
+    .canvas-body { flex: 1; overflow-y: auto; padding: var(--p6); }
+    .agent-col   { width: 300px; flex-shrink: 0; display: flex; flex-direction: column;
+                   background: var(--s1); border-left: 1px solid var(--bdr); }
+
+    /* ===== TABS ===== */
+    .tab-bar  { display: flex; padding: 0 var(--p6); border-bottom: 1px solid var(--bdr); flex-shrink: 0; }
+    .tab      { padding: var(--p3) var(--p4); font-size: var(--fs-sm); font-weight: var(--fw-m);
+                color: var(--tx-sub); background: none; border: none; cursor: pointer;
+                border-bottom: 2px solid transparent; margin-bottom: -1px; transition: var(--ease); }
+    .tab:hover{ color: var(--tx); }
+    .tab.on   { color: var(--pri); border-bottom-color: var(--pri); }
+
+    /* ===== FLEX UTILS ===== */
+    .f      { display: flex; }
+    .fc     { display: flex; flex-direction: column; }
+    .fw     { flex-wrap: wrap; }
+    .ac     { align-items: center; }
+    .as     { align-items: flex-start; }
+    .jb     { justify-content: space-between; }
+    .jc     { justify-content: center; }
+    .je     { justify-content: flex-end; }
+    .f1     { flex: 1; }
+    .fs0    { flex-shrink: 0; }
+    .g1     { gap: var(--p1); } .g2  { gap: var(--p2); } .g3  { gap: var(--p3); }
+    .g4     { gap: var(--p4); } .g5  { gap: var(--p5); } .g6  { gap: var(--p6); }
+
+    /* ===== SPACING ===== */
+    .p2  { padding: var(--p2); } .p3  { padding: var(--p3); }
+    .p4  { padding: var(--p4); } .p5  { padding: var(--p5); }
+    .px3 { padding-left: var(--p3); padding-right: var(--p3); }
+    .px4 { padding-left: var(--p4); padding-right: var(--p4); }
+    .py2 { padding-top: var(--p2); padding-bottom: var(--p2); }
+    .mt2 { margin-top: var(--p2); } .mt3 { margin-top: var(--p3); }
+    .mt4 { margin-top: var(--p4); } .mt5 { margin-top: var(--p5); }
+    .mb2 { margin-bottom: var(--p2); } .mb3 { margin-bottom: var(--p3); }
+    .mb4 { margin-bottom: var(--p4); } .mb5 { margin-bottom: var(--p5); }
+
+    /* ===== TYPOGRAPHY ===== */
+    .xs  { font-size: var(--fs-xs); } .sm   { font-size: var(--fs-sm); }
+    .md  { font-size: var(--fs-md); } .lg   { font-size: var(--fs-lg); }
+    .xl  { font-size: var(--fs-xl); }
+    .dim { color: var(--tx-dim); }    .sub  { color: var(--tx-sub); }
+    .pri { color: var(--pri); }       .ok   { color: var(--ok); }
+    .wrn { color: var(--warn); }      .err  { color: var(--err); }
+    .sec { color: var(--sec); }
+    .b   { font-weight: var(--fw-b); } .sb  { font-weight: var(--fw-sb); }
+    .m   { font-weight: var(--fw-m); }
+    .trunc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .wfull { width: 100%; }
+    .mw0   { min-width: 0; }
+    .lbl   { display: block; font-size: var(--fs-xs); font-weight: var(--fw-m);
+             color: var(--tx-sub); margin-bottom: 3px; text-transform: uppercase; letter-spacing: .06em; }
+
+    /* ===== CARD ===== */
+    .card  { background: var(--s1); border: 1px solid var(--bdr); border-radius: var(--r-lg); padding: var(--p5); }
+    .card2 { background: var(--s2); border: 1px solid var(--bdr); border-radius: var(--r);    padding: var(--p3) var(--p4); }
+    .card:hover { border-color: var(--bdr2); }
+
+    /* ===== BUTTONS ===== */
+    .btn  { display: inline-flex; align-items: center; gap: var(--p2); padding: var(--p2) var(--p4);
+            border-radius: var(--r); border: none; cursor: pointer; font-size: var(--fs-sm);
+            font-weight: var(--fw-m); transition: var(--ease); }
+    .btn-p  { background: var(--pri); color: #fff; }
+    .btn-p:hover   { background: #4f46e5; box-shadow: 0 0 22px var(--pri-g); }
+    .btn-ok  { background: var(--ok); color: #fff; }
+    .btn-ok:hover  { background: #16a34a; }
+    .btn-g  { background: transparent; color: var(--tx-sub); border: 1px solid var(--bdr); }
+    .btn-g:hover   { background: var(--s2); color: var(--tx); }
+    .btn-s  { padding: var(--p1) var(--p3); font-size: var(--fs-xs); }
+    .btn-l  { padding: var(--p3) var(--p8); font-size: var(--fs-md); font-weight: var(--fw-sb); }
+    .btn:disabled  { opacity: .45; cursor: not-allowed; }
+
+    /* ===== INPUTS ===== */
+    .inp  { width: 100%; padding: var(--p2) var(--p3); background: var(--s2); border: 1px solid var(--bdr);
+            border-radius: var(--r); color: var(--tx); font-size: var(--fs-sm); outline: none;
+            transition: var(--ease); }
+    .inp:focus  { border-color: var(--pri); box-shadow: 0 0 0 3px var(--pri-g); }
+    .inp::placeholder { color: var(--tx-dim); }
+    .sel  { appearance: none; width: 100%; padding: var(--p2) var(--p3); background: var(--s2);
+            border: 1px solid var(--bdr); border-radius: var(--r); color: var(--tx);
+            font-size: var(--fs-sm); outline: none; cursor: pointer; transition: var(--ease); }
+    .sel:focus { border-color: var(--pri); }
+
+    /* ===== BADGES ===== */
+    .bdg  { display: inline-flex; align-items: center; gap: 3px; padding: 2px var(--p2);
+            border-radius: var(--r-f); font-size: var(--fs-xs); font-weight: var(--fw-sb); white-space: nowrap; }
+    .bdg-p  { background: var(--pri-g); color: var(--pri);  border: 1px solid rgba(99,102,241,.3); }
+    .bdg-ok { background: rgba(34,197,94,.12); color: var(--ok);  border: 1px solid rgba(34,197,94,.3); }
+    .bdg-w  { background: rgba(245,158,11,.12); color: var(--warn); border: 1px solid rgba(245,158,11,.3); }
+    .bdg-e  { background: rgba(239,68,68,.12); color: var(--err);  border: 1px solid rgba(239,68,68,.3); }
+    .bdg-c  { background: rgba(34,211,238,.1);  color: var(--sec);  border: 1px solid rgba(34,211,238,.25); }
+    .bdg-gy { background: rgba(148,163,184,.08); color: var(--tx-sub); border: 1px solid var(--bdr); }
+
+    /* ===== PROGRESS BAR ===== */
+    .bar-track { width: 100%; height: 6px; background: var(--s3); border-radius: var(--r-f); overflow: hidden; }
+    .bar-fill  { height: 100%; border-radius: var(--r-f); transition: width .5s cubic-bezier(.4,0,.2,1); }
+
+    /* ===== TIMELINE ===== */
+    .tl-item { display: flex; gap: var(--p3); padding: var(--p3) 0; position: relative; }
+    .tl-item:not(:last-child)::after { content: ''; position: absolute; left: 7px; top: 36px;
+      bottom: 0; width: 1px; background: var(--bdr); }
+    .tl-dot  { width: 15px; height: 15px; border-radius: 50%; flex-shrink: 0;
+               margin-top: 3px; border: 2px solid var(--bg); }
+
+    /* ===== CHAT ===== */
+    .chat-msgs { flex: 1; overflow-y: auto; padding: var(--p4); display: flex;
+                 flex-direction: column; gap: var(--p3); }
+    .msg-u     { align-self: flex-end;  max-width: 88%; }
+    .msg-a     { align-self: flex-start; max-width: 94%; }
+    .bubble    { padding: var(--p2) var(--p3); border-radius: var(--r-lg); font-size: var(--fs-sm); line-height: 1.6; }
+    .msg-u .bubble { background: var(--pri); color: #fff; border-bottom-right-radius: 3px; }
+    .msg-a .bubble { background: var(--s2); color: var(--tx); border-bottom-left-radius: 3px; }
+    .msg-ts    { font-size: var(--fs-xs); color: var(--tx-dim); margin-top: 2px; }
+    .msg-u .msg-ts { text-align: right; }
+    .chat-inp-row { padding: var(--p3) var(--p4); border-top: 1px solid var(--bdr); display: flex; gap: var(--p2); }
+
+    /* ===== AGENT HEADER ===== */
+    .agt-hdr  { padding: var(--p3) var(--p4); border-bottom: 1px solid var(--bdr);
+                display: flex; align-items: center; gap: var(--p2); flex-shrink: 0; }
+    .pulse-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok);
+                 box-shadow: 0 0 7px var(--ok); animation: pulse 2s infinite; }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .4; } }
+
+    /* ===== TYPING DOTS ===== */
+    .typing-wrap { display: flex; gap: 4px; align-items: center; }
+    .tdot { width: 6px; height: 6px; border-radius: 50%; background: var(--tx-sub); animation: td 1.2s infinite; }
+    .tdot:nth-child(2) { animation-delay: .2s; }
+    .tdot:nth-child(3) { animation-delay: .4s; }
+    @keyframes td { 0%,60%,100% { transform: translateY(0); } 30% { transform: translateY(-6px); } }
+
+    /* ===== CHANNELS ===== */
+    .ch-grid  { display: grid; grid-template-columns: 1fr 1fr; gap: var(--p3); }
+    .ch-chip  { padding: var(--p3) var(--p4); border-radius: var(--r); border: 2px solid var(--bdr);
+                background: var(--s2); cursor: pointer; transition: var(--ease); text-align: center; }
+    .ch-chip.sel  { border-color: var(--pri); background: var(--pri-g); }
+    .ch-chip:hover { border-color: rgba(99,102,241,.35); }
+
+    /* ===== PREVIEW RESULT ===== */
+    .prev-box { background: linear-gradient(135deg,rgba(99,102,241,.09),rgba(34,211,238,.05));
+                border: 1px solid rgba(99,102,241,.28); border-radius: var(--r-xl); padding: var(--p5); }
+    .big-num  { font-size: 38px; font-weight: var(--fw-b); color: var(--pri); line-height: 1; }
+
+    /* ===== SCORE RING ===== */
+    .ring { width: 40px; height: 40px; border-radius: 50%; border: 2px solid; flex-shrink: 0;
+            display: flex; align-items: center; justify-content: center;
+            font-size: var(--fs-xs); font-weight: var(--fw-b); }
+
+    /* ===== LOGO ===== */
+    .logo     { display: flex; align-items: center; gap: var(--p3); }
+    .logo-mk  { width: 30px; height: 30px; border-radius: 7px; flex-shrink: 0;
+                background: linear-gradient(135deg, var(--pri), var(--sec));
+                display: flex; align-items: center; justify-content: center;
+                font-size: 13px; font-weight: var(--fw-b); color: #fff; }
+
+    /* ===== STAT CARD ===== */
+    .stats-row { display: grid; grid-template-columns: repeat(4,1fr); gap: var(--p4); }
+    .stat-v   { font-size: var(--fs-xl); font-weight: var(--fw-b); line-height: 1.1; }
+
+    /* ===== TWO-COL GRID ===== */
+    .g2-col   { display: grid; grid-template-columns: 1fr 1fr; gap: var(--p4); }
+    .g3-col   { display: grid; grid-template-columns: repeat(3,1fr); gap: var(--p4); }
+
+    /* ===== SECTION TITLE ===== */
+    .stitle   { font-size: var(--fs-xs); font-weight: var(--fw-sb); color: var(--tx-sub);
+                text-transform: uppercase; letter-spacing: .08em; }
+
+    /* ===== EMPTY STATE ===== */
+    .empty    { display: flex; flex-direction: column; align-items: center; justify-content: center;
+                padding: var(--p8) var(--p4); text-align: center; gap: var(--p3); }
+    .empty-ic { font-size: 44px; opacity: .25; }
+
+    /* ===== DIVIDER ===== */
+    .dvdr     { border: none; border-top: 1px solid var(--bdr); margin: var(--p3) 0; }
+
+    /* ===== SUGGESTION CHIPS ===== */
+    .sugg-area { padding: var(--p3) var(--p4); border-top: 1px solid var(--bdr); flex-shrink: 0; }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef, useCallback } = React;
+
+/* ================================================================
+   MOCK DATA
+================================================================ */
+const PROFILES = {
+  USR001: {
+    name:'Nguyen Van An', email:'vanan@example.com',
+    segment:'High-Value Investor', risk:'Medium', joined:'2023-04-12',
+    stats:{ events:312, session:'4m 22s', conv:'18.4%', ltv:'$4,280' },
+    nba:[
+      { id:1, action:'Send Stock Alert', ticker:'VNM', conf:0.92, channel:'Email', pri:'High' },
+      { id:2, action:'Promote LEO Fund A', ticker:null, conf:0.87, channel:'Zalo', pri:'High' },
+      { id:3, action:'Re-engagement Push', ticker:null, conf:0.74, channel:'Push', pri:'Medium' },
+    ],
+    interests:[
+      { tk:'VNM', score:0.93 },{ tk:'HPG', score:0.87 },
+      { tk:'VCB', score:0.76 },{ tk:'FPT', score:0.71 },{ tk:'MWG', score:0.62 },
+    ],
+    events:[
+      { ts:'2026-05-12 09:14', type:'page_view',  text:'Viewed VNM stock detail page' },
+      { ts:'2026-05-12 08:55', type:'click',       text:'Clicked "Buy" on HPG order book' },
+      { ts:'2026-05-11 16:30', type:'email_open',  text:'Opened: Weekly Market Brief' },
+      { ts:'2026-05-11 14:02', type:'login',       text:'App login — Mobile iOS' },
+      { ts:'2026-05-11 10:20', type:'search',      text:'Searched: "dividend stocks"' },
+      { ts:'2026-05-10 09:45', type:'page_view',   text:'Viewed VCB stock detail page' },
+      { ts:'2026-05-09 15:12', type:'click',       text:'Clicked portfolio performance chart' },
+    ],
+  },
+  USR002: {
+    name:'Tran Thi Bich', email:'bich.tran@example.com',
+    segment:'New Investor', risk:'Low', joined:'2026-05-01',
+    stats:{ events:12, session:'7m 01s', conv:'0%', ltv:'$0' },
+    nba:[
+      { id:1, action:'Onboarding Welcome Email', ticker:null, conf:0.96, channel:'Email', pri:'High' },
+      { id:2, action:'Tutorial Nudge', ticker:null, conf:0.88, channel:'Push', pri:'High' },
+    ],
+    interests:[
+      { tk:'VCB', score:0.55 },{ tk:'BID', score:0.48 },
+    ],
+    events:[
+      { ts:'2026-05-12 11:05', type:'page_view', text:'Viewed Getting Started guide' },
+      { ts:'2026-05-12 11:00', type:'signup',    text:'Account created via web' },
+    ],
+  },
+  USR003: {
+    name:'Le Minh Khoa', email:'khoa.le@example.com',
+    segment:'Active Trader', risk:'High', joined:'2022-11-08',
+    stats:{ events:1240, session:'12m 45s', conv:'42.1%', ltv:'$28,600' },
+    nba:[
+      { id:1, action:'Flash Sale Alert', ticker:'HPG', conf:0.94, channel:'Zalo', pri:'High' },
+      { id:2, action:'Premium Tier Upsell', ticker:null, conf:0.82, channel:'Email', pri:'Medium' },
+      { id:3, action:'Daily Briefing Push', ticker:null, conf:0.79, channel:'Push', pri:'Medium' },
+      { id:4, action:'Facebook Re-targeting', ticker:null, conf:0.65, channel:'Facebook', pri:'Low' },
+    ],
+    interests:[
+      { tk:'HPG', score:0.97 },{ tk:'VNM', score:0.88 },
+      { tk:'SSI', score:0.83 },{ tk:'VHM', score:0.75 },{ tk:'FPT', score:0.68 },
+    ],
+    events:[
+      { ts:'2026-05-12 10:02', type:'trade',     text:'Bought 500 HPG @ 28,500 VND' },
+      { ts:'2026-05-12 09:55', type:'click',     text:'Viewed HPG order book depth' },
+      { ts:'2026-05-12 08:01', type:'login',     text:'App login — Android' },
+      { ts:'2026-05-11 16:45', type:'trade',     text:'Sold 200 VNM @ 71,200 VND' },
+      { ts:'2026-05-11 14:30', type:'page_view', text:'Viewed portfolio analytics dashboard' },
+      { ts:'2026-05-10 11:00', type:'email_open',text:'Opened: Market Morning Brief' },
+    ],
+  },
+};
+
+const SEGMENT_SIZE = { 'High-Value Investor':312, 'New Investor':1840, 'Active Trader':678, 'All Segments':4291 };
+
+const CH_CFG = {
+  Email:    { icon:'✉️',  color:'#6366f1' },
+  Zalo:     { icon:'💬',  color:'#22d3ee' },
+  Facebook: { icon:'👥',  color:'#3b82f6' },
+  Push:     { icon:'🔔',  color:'#f59e0b' },
+};
+
+const EV_CFG = {
+  page_view:  { icon:'👁',  color:'var(--pri)' },
+  click:      { icon:'🖱',  color:'var(--sec)' },
+  email_open: { icon:'✉️',  color:'var(--ok)' },
+  login:      { icon:'🔑',  color:'var(--warn)' },
+  search:     { icon:'🔍',  color:'var(--tx-sub)' },
+  signup:     { icon:'⭐',  color:'var(--ok)' },
+  trade:      { icon:'📈',  color:'var(--pur)' },
+};
+
+const CHAT_INIT = [
+  { id:0, role:'a', text:"Hi! I'm **LEO**, your AI marketing agent powered by Gemini.\n\nI can inspect profiles, preview campaigns, and surface next-best actions from your CDP. What would you like to explore?", ts:'now' }
+];
+
+const SUGGESTIONS = [
+  'Show profile USR001',
+  'Preview email campaign for high-value investors',
+  "What's the top segment by LTV?",
+  'Analyze Zalo channel performance',
+];
+
+function mockReply(msg) {
+  const lo = msg.toLowerCase();
+  if (/usr\d+|profile/i.test(lo)) {
+    const id = (msg.match(/USR\d+/i)||['USR001'])[0].toUpperCase();
+    const p  = PROFILES[id];
+    if (p) return `Profile **${id}** — **${p.name}** (${p.segment}).\n\nTop interest: **${p.interests[0]?.tk}** (${Math.round(p.interests[0]?.score*100)}% affinity). Recommended action: **${p.nba[0]?.action}** via ${p.nba[0]?.channel}.\n\nEstimated open rate for this profile: ~34%.`;
+    return `Profile **${id}** not found in CDP. Try USR001, USR002, or USR003.`;
+  }
+  if (/campaign|preview|reach|launch/i.test(lo)) {
+    const n = (200 + Math.floor(Math.random()*120)).toLocaleString();
+    return `Campaign dry-run complete. Estimated reach: **${n} qualified profiles** match current filters.\n\nExpected conversion lift: **+12%** vs. baseline. Optimal send window: **Tuesday 09:00 ICT** (peak engagement).`;
+  }
+  if (/segment|ltv|high.value|investor/i.test(lo)) {
+    return `**High-Value Investors** (312 profiles) have 2.4× higher LTV vs. average.\n\nTop behaviors: stock page views, portfolio checks. Churn risk: **low (8%)**. Recommended channel: Email (38% open rate).`;
+  }
+  if (/zalo|channel|email|push|facebook/i.test(lo)) {
+    return `Channel benchmark across 1,847 active profiles:\n\n• **Zalo OA**: 68% open rate\n• **Email**: 22% open rate\n• **Push**: 41% tap rate\n• **Facebook**: 3.1% CTR\n\nZalo outperforms significantly for this CDP cohort.`;
+  }
+  if (/churn|risk|inactive/i.test(lo)) {
+    return `Churn risk model output (last 30 days):\n\n• **High-Value Investor**: 8% churn risk\n• **New Investor**: 34% churn risk (first-week critical)\n• **Active Trader**: 5% churn risk\n\nRecommend an onboarding re-engagement push for new investors within 72h.`;
+  }
+  return `Based on current CDP signals, I see strong patterns worth acting on. Would you like me to run a **campaign preview**, drill into a specific **profile**, or compare **channel performance**?`;
+}
+
+/* ================================================================
+   SHARED COMPONENTS
+================================================================ */
+function Typing() {
+  return <div className="typing-wrap"><div className="tdot"/><div className="tdot"/><div className="tdot"/></div>;
+}
+
+function SectionTitle({ label, right }) {
+  return (
+    <div className="f ac jb mb4">
+      <span className="stitle">{label}</span>
+      {right}
+    </div>
+  );
+}
+
+/* ================================================================
+   HEADER
+================================================================ */
+function Header() {
+  return (
+    <header className="hdr">
+      <div className="logo">
+        <div className="logo-mk">L</div>
+        <div>
+          <div className="sb" style={{fontSize:'var(--fs-md)'}}>LEO Activation</div>
+          <div className="xs dim">AI Marketing Platform</div>
+        </div>
+      </div>
+      <div className="f ac g3">
+        <span className="bdg bdg-ok">● Live CDC</span>
+        <div className="card2 f ac g2 py2">
+          <span className="xs sub">Model:</span>
+          <span className="xs sec m">gemini-2.5-flash-lite</span>
+        </div>
+        <span className="xs sub">2026-05-12</span>
+      </div>
+    </header>
+  );
+}
+
+/* ================================================================
+   AUDIENCE 360
+================================================================ */
+function ProfileSearch({ onSearch, loading }) {
+  const [val, setVal] = useState('');
+  const go = (id) => { if (id) { setVal(id); onSearch(id); } };
+  return (
+    <div className="card mb4">
+      <div className="f ac g3">
+        <input className="inp f1" placeholder="Enter profile ID (try USR001, USR002, USR003)"
+          value={val} onChange={e=>setVal(e.target.value)}
+          onKeyDown={e=>e.key==='Enter'&&go(val.trim())} />
+        <button className="btn btn-p" onClick={()=>go(val.trim())} disabled={loading||!val.trim()}>
+          {loading ? <Typing/> : 'Inspect →'}
+        </button>
+      </div>
+      <div className="f g2 mt3 ac">
+        <span className="xs dim">Quick load:</span>
+        {['USR001','USR002','USR003'].map(id=>(
+          <button key={id} className="btn btn-g btn-s" onClick={()=>go(id)}>{id}</button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ProfileCard({ profile }) {
+  const riskCls = { Low:'bdg-ok', Medium:'bdg-w', High:'bdg-e' }[profile.risk];
+  const initials = profile.name.split(' ').map(w=>w[0]).join('').slice(0,2);
+  return (
+    <div className="card mb4 f ac jb g4 fw">
+      <div className="f ac g4">
+        <div style={{width:50,height:50,borderRadius:'50%',flexShrink:0,
+          background:'linear-gradient(135deg,#6366f1,#22d3ee)',
+          display:'flex',alignItems:'center',justifyContent:'center',
+          fontSize:16,fontWeight:700,color:'#fff'}}>{initials}</div>
+        <div>
+          <div className="lg sb">{profile.name}</div>
+          <div className="sm sub mt2">{profile.email}</div>
+        </div>
+      </div>
+      <div className="f ac g2 fw">
+        <span className="bdg bdg-p">{profile.segment}</span>
+        <span className={`bdg ${riskCls}`}>Risk: {profile.risk}</span>
+        <span className="xs sub">Joined {profile.joined}</span>
+      </div>
+    </div>
+  );
+}
+
+function StatRow({ stats }) {
+  const items = [
+    { label:'Total Events', val:stats.events, color:'var(--pri)' },
+    { label:'Avg. Session',  val:stats.session, color:'var(--sec)' },
+    { label:'Conv. Rate',   val:stats.conv, color:'var(--ok)' },
+    { label:'Est. LTV',     val:stats.ltv, color:'var(--warn)' },
+  ];
+  return (
+    <div className="stats-row mb4">
+      {items.map(({label,val,color})=>(
+        <div key={label} className="card p4">
+          <div className="lbl mb2">{label}</div>
+          <div className="stat-v" style={{color}}>{val}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function AffinityChart({ interests }) {
+  return (
+    <div className="card mb4">
+      <SectionTitle label="Interest Affinity" right={<span className="bdg bdg-c">Top Stocks</span>} />
+      <div className="fc g3">
+        {interests.map(({tk, score})=>{
+          const pct = Math.round(score*100);
+          const col = score>.8?'var(--ok)':score>.6?'var(--warn)':'var(--tx-sub)';
+          return (
+            <div key={tk}>
+              <div className="f jb mb2">
+                <span className="sm m">{tk}</span>
+                <span className="sm" style={{color:col}}>{pct}%</span>
+              </div>
+              <div className="bar-track">
+                <div className="bar-fill" style={{width:`${pct}%`,background:`linear-gradient(90deg,var(--pri),${col})`}}/>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function NBAList({ nba }) {
+  const priCls = { High:'bdg-e', Medium:'bdg-w', Low:'bdg-gy' };
+  return (
+    <div className="card">
+      <SectionTitle label="Next-Best Actions" right={<span className="bdg bdg-p">NBA Engine</span>} />
+      <div className="fc g3">
+        {nba.map(({id,action,ticker,conf,channel,pri})=>{
+          const chColor = CH_CFG[channel]?.color||'var(--pri)';
+          return (
+            <div key={id} className="card2 f ac jb g3">
+              <div className="f ac g3 mw0">
+                <div className="ring" style={{color:chColor,borderColor:chColor}}>
+                  {Math.round(conf*100)}%
+                </div>
+                <div className="mw0">
+                  <div className="sm m trunc">{action}</div>
+                  {ticker&&<div className="xs dim mt2">Ticker: {ticker}</div>}
+                </div>
+              </div>
+              <div className="f ac g2 fs0">
+                <span className="bdg bdg-gy">{CH_CFG[channel]?.icon} {channel}</span>
+                <span className={`bdg ${priCls[pri]}`}>{pri}</span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function EventTimeline({ events }) {
+  return (
+    <div className="card">
+      <SectionTitle label="Event Timeline" right={<span className="xs sub">{events.length} events</span>} />
+      {events.map((ev,i)=>{
+        const cfg = EV_CFG[ev.type]||{icon:'•',color:'var(--tx-sub)'};
+        return (
+          <div key={i} className="tl-item">
+            <div className="tl-dot" style={{background:cfg.color}}/>
+            <div className="f1 mw0">
+              <div className="sm" style={{color:cfg.color}}>{ev.text}</div>
+              <div className="f ac g2 mt2">
+                <span className="xs dim">{ev.ts}</span>
+                <span className="bdg bdg-gy">{cfg.icon} {ev.type.replace('_',' ')}</span>
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function Audience360() {
+  const [pid, setPid]       = useState(null);
+  const [profile, setP]     = useState(null);
+  const [loading, setLoad]  = useState(false);
+
+  const search = (id) => {
+    setLoad(true); setP(null); setPid(id);
+    setTimeout(()=>{ setP(PROFILES[id.toUpperCase()]||null); setLoad(false); }, 650);
+  };
+
+  return (
+    <div>
+      <div className="mb5">
+        <div className="xl sb mb2">Audience 360°</div>
+        <div className="sm sub">Inspect customer profiles, interest affinity scores, and behavioral timelines in real-time.</div>
+      </div>
+      <ProfileSearch onSearch={search} loading={loading}/>
+      {loading&&<div className="empty"><Typing/><div className="sm sub">Fetching profile from CDP…</div></div>}
+      {!loading&&pid&&!profile&&(
+        <div className="empty">
+          <div className="empty-ic">🔍</div>
+          <div className="md sb">Profile not found</div>
+          <div className="sm sub">No record for <strong>{pid}</strong> in CDP. Try USR001, USR002, or USR003.</div>
+        </div>
+      )}
+      {!loading&&profile&&(
+        <>
+          <ProfileCard profile={profile}/>
+          <StatRow stats={profile.stats}/>
+          <div className="g2-col">
+            <div>
+              <AffinityChart interests={profile.interests}/>
+              <NBAList nba={profile.nba}/>
+            </div>
+            <EventTimeline events={profile.events}/>
+          </div>
+        </>
+      )}
+      {!loading&&!pid&&(
+        <div className="empty">
+          <div className="empty-ic">👤</div>
+          <div className="md sb">Enter a Profile ID above</div>
+          <div className="sm sub">Inspect NBA scores, stock affinity, and behavioral events for any CDP customer.</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ================================================================
+   CAMPAIGN ENGINE
+================================================================ */
+function CampaignEngine() {
+  const [name,    setName]   = useState('Q2 Stock Alert Campaign');
+  const [seg,     setSeg]    = useState('High-Value Investor');
+  const [trigger, setTrig]   = useState('page_view');
+  const [minLTV,  setLTV]    = useState('1000');
+  const [channels,setCh]     = useState(['Email','Zalo']);
+  const [freqCap, setFreq]   = useState('1x per day');
+  const [preview, setPrev]   = useState(null);
+  const [running, setRun]    = useState(false);
+
+  const toggle = (ch) => setCh(p=>p.includes(ch)?p.filter(c=>c!==ch):[...p,ch]);
+
+  const dryRun = () => {
+    setRun(true); setPrev(null);
+    setTimeout(()=>{
+      const base = SEGMENT_SIZE[seg]||500;
+      const reach = Math.round(base*(0.65+channels.length*.07));
+      const convs = Math.round(reach*.184);
+      setPrev({
+        reach, convs,
+        revenue: `$${(convs*48).toLocaleString()}`,
+        time: 'Tue 2026-05-19, 09:00 ICT',
+        conf: 0.88,
+      });
+      setRun(false);
+    }, 950);
+  };
+
+  return (
+    <div>
+      <div className="mb5">
+        <div className="xl sb mb2">Campaign Engine</div>
+        <div className="sm sub">Build audience rules, select channels, and preview reach before activating a campaign.</div>
+      </div>
+
+      <div className="g2-col mb4">
+        {/* Rule Builder */}
+        <div className="card">
+          <div className="stitle mb4">Rule Builder</div>
+          <div className="fc g4">
+            <div>
+              <label className="lbl">Campaign Name</label>
+              <input className="inp" value={name} onChange={e=>setName(e.target.value)} placeholder="Name your campaign"/>
+            </div>
+            <div>
+              <label className="lbl">Target Segment</label>
+              <select className="sel" value={seg} onChange={e=>setSeg(e.target.value)}>
+                {Object.keys(SEGMENT_SIZE).map(s=><option key={s}>{s}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="lbl">Trigger Behavior</label>
+              <select className="sel" value={trigger} onChange={e=>setTrig(e.target.value)}>
+                <option value="page_view">Stock Page View</option>
+                <option value="trade">Executed Trade</option>
+                <option value="search">Search Event</option>
+                <option value="inactivity">7-Day Inactivity</option>
+                <option value="portfolio_check">Portfolio Check</option>
+              </select>
+            </div>
+            <div>
+              <label className="lbl">Min. LTV Filter (USD)</label>
+              <input className="inp" type="number" min="0" value={minLTV}
+                onChange={e=>setLTV(e.target.value)} placeholder="0"/>
+            </div>
+            <div>
+              <label className="lbl">A/B Test Split</label>
+              <select className="sel">
+                <option>No split (100% active)</option>
+                <option>50 / 50 holdout</option>
+                <option>80 / 20 holdout</option>
+                <option>Custom…</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        {/* Channel Selector */}
+        <div className="card">
+          <div className="stitle mb4">Channel Selection</div>
+          <div className="ch-grid mb4">
+            {Object.entries(CH_CFG).map(([ch,cfg])=>(
+              <div key={ch} className={`ch-chip${channels.includes(ch)?' sel':''}`} onClick={()=>toggle(ch)}>
+                <div style={{fontSize:26,marginBottom:4}}>{cfg.icon}</div>
+                <div className="sm m">{ch}</div>
+                {channels.includes(ch)&&<div className="xs pri mt2">✓ Selected</div>}
+              </div>
+            ))}
+          </div>
+          <div className="fc g3">
+            <div>
+              <label className="lbl">Frequency Cap</label>
+              <select className="sel" value={freqCap} onChange={e=>setFreq(e.target.value)}>
+                <option>1x per day</option>
+                <option>2x per week</option>
+                <option>1x per week</option>
+                <option>No cap</option>
+              </select>
+            </div>
+            <div>
+              <label className="lbl">Schedule</label>
+              <input className="inp" type="datetime-local" defaultValue="2026-05-19T09:00"/>
+            </div>
+            <div>
+              <label className="lbl">Message Template</label>
+              <select className="sel">
+                <option>Stock Alert — VNM Spike</option>
+                <option>Weekly Market Brief</option>
+                <option>Portfolio Performance Update</option>
+                <option>Custom (use editor)</option>
+              </select>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Dry-Run CTA */}
+      <div className="f jc mb4">
+        <button className={`btn btn-l ${running?'btn-g':'btn-ok'}`}
+          onClick={dryRun} disabled={running||channels.length===0}
+          style={{minWidth:300}}>
+          {running ? <><Typing/>&nbsp;Simulating…</> : '🚀  Dry-Run / Preview Campaign'}
+        </button>
+      </div>
+
+      {/* Preview Results */}
+      {preview&&(
+        <div className="prev-box">
+          <div className="f ac jb mb4">
+            <div>
+              <div className="stitle mb2">Preview Results</div>
+              <div className="sm sub">{name} • {channels.join(', ')}</div>
+            </div>
+            <span className="bdg bdg-ok">✓ Dry-Run Complete</span>
+          </div>
+          <div className="g3-col mb4">
+            <div>
+              <div className="lbl mb2">Projected Reach</div>
+              <div className="big-num">{preview.reach.toLocaleString()}</div>
+              <div className="xs sub mt2">of {(SEGMENT_SIZE[seg]||0).toLocaleString()} in segment</div>
+            </div>
+            <div>
+              <div className="lbl mb2">Est. Conversions</div>
+              <div className="big-num" style={{color:'var(--ok)'}}>{preview.convs.toLocaleString()}</div>
+              <div className="xs sub mt2">{((preview.convs/preview.reach)*100).toFixed(1)}% conv. rate</div>
+            </div>
+            <div>
+              <div className="lbl mb2">Projected Revenue</div>
+              <div className="big-num" style={{color:'var(--warn)'}}>{preview.revenue}</div>
+              <div className="xs sub mt2">@ $48 avg. order value</div>
+            </div>
+          </div>
+          <hr className="dvdr"/>
+          <div className="f g5 fw">
+            <span className="xs sub">📅 Optimal send: <span className="sm" style={{color:'var(--tx)'}}>{preview.time}</span></span>
+            <span className="xs sub">📡 Freq cap: <span className="sm" style={{color:'var(--tx)'}}>{freqCap}</span></span>
+            <span className="xs sub">🎯 Model confidence: <span className="xs ok">{Math.round(preview.conf*100)}%</span></span>
+          </div>
+          <div className="f g3 mt4 je fw">
+            <button className="btn btn-g btn-s">Save Draft</button>
+            <button className="btn btn-p btn-s" style={{opacity:.5,cursor:'not-allowed'}}>Launch (requires approval)</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ================================================================
+   AGENT PANEL
+================================================================ */
+function AgentPanel() {
+  const [msgs,   setMsgs]  = useState(CHAT_INIT);
+  const [input,  setInp]   = useState('');
+  const [typing, setTyp]   = useState(false);
+  const bottomRef          = useRef(null);
+
+  useEffect(()=>{ bottomRef.current?.scrollIntoView({behavior:'smooth'}); },[msgs,typing]);
+
+  const send = useCallback((text) => {
+    const t = (text||input).trim();
+    if (!t) return;
+    const userMsg = { id:Date.now(), role:'u', text:t, ts:new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) };
+    setMsgs(p=>[...p,userMsg]);
+    setInp('');
+    setTyp(true);
+    setTimeout(()=>{
+      setMsgs(p=>[...p,{ id:Date.now()+1, role:'a', text:mockReply(t), ts:new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) }]);
+      setTyp(false);
+    }, 900+Math.random()*700);
+  },[input]);
+
+  const fmt = (t) => t.replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>').replace(/\n/g,'<br/>');
+
+  return (
+    <>
+      <div className="agt-hdr">
+        <div className="pulse-dot"/>
+        <div className="f1">
+          <div className="sm sb">LEO Agent</div>
+          <div className="xs dim">Gemini • Tool-mediated CDP access</div>
+        </div>
+        <span className="bdg bdg-ok">Online</span>
+      </div>
+
+      <div className="chat-msgs">
+        {msgs.map(msg=>(
+          <div key={msg.id} className={`msg-${msg.role}`}>
+            <div className="bubble" dangerouslySetInnerHTML={{__html:fmt(msg.text)}}/>
+            <div className="msg-ts">{msg.ts}</div>
+          </div>
+        ))}
+        {typing&&(
+          <div className="msg-a">
+            <div className="bubble"><Typing/></div>
+          </div>
+        )}
+        <div ref={bottomRef}/>
+      </div>
+
+      <div className="sugg-area">
+        <div className="xs dim mb2">Quick prompts</div>
+        <div className="fc g1">
+          {SUGGESTIONS.map(s=>(
+            <button key={s} className="btn btn-g btn-s"
+              style={{justifyContent:'flex-start',fontSize:11,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}
+              onClick={()=>send(s)}>{s}</button>
+          ))}
+        </div>
+      </div>
+
+      <div className="chat-inp-row">
+        <input className="inp f1" placeholder="Ask LEO anything…"
+          value={input} onChange={e=>setInp(e.target.value)}
+          onKeyDown={e=>e.key==='Enter'&&send()}/>
+        <button className="btn btn-p btn-s" onClick={()=>send()} disabled={!input.trim()||typing}>↑</button>
+      </div>
+    </>
+  );
+}
+
+/* ================================================================
+   APP ROOT
+================================================================ */
+function App() {
+  const [view, setView] = useState('audience');
+  return (
+    <div className="app">
+      <Header/>
+      <div className="main-wrap">
+        <div className="canvas">
+          <div className="tab-bar">
+            <button className={`tab${view==='audience'?' on':''}`} onClick={()=>setView('audience')}>👤 Audience 360</button>
+            <button className={`tab${view==='campaign'?' on':''}`} onClick={()=>setView('campaign')}>🚀 Campaign Engine</button>
+          </div>
+          <div className="canvas-body">
+            {view==='audience'?<Audience360/>:<CampaignEngine/>}
+          </div>
+        </div>
+        <div className="agent-col">
+          <AgentPanel/>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>

@@ -271,3 +271,47 @@ body {
 ================================================================ */
 .dvdr      { border: none; border-top: 1px solid var(--bdr); margin: var(--p3) 0; }
 .sugg-area { padding: var(--p3) var(--p4); border-top: 1px solid var(--bdr); flex-shrink: 0; }
+
+/* ================================================================
+   AUDIENCE PULSE — SURGE CARDS
+================================================================ */
+.surge-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--p3); }
+.surge-card { background: var(--s2); border: 1px solid var(--bdr); border-radius: var(--r);
+              padding: var(--p3) var(--p4); transition: var(--ease); cursor: pointer; }
+.surge-card:hover { border-color: var(--pri); background: var(--s3); }
+.surge-tk   { font-size: var(--fs-md); font-weight: var(--fw-b); }
+
+/* ================================================================
+   AUDIENCE PULSE — SEGMENT CARDS
+================================================================ */
+.seg-grid  { display: grid; grid-template-columns: 1fr 1fr; gap: var(--p4); }
+.seg-card  { background: var(--s1); border: 1px solid var(--bdr); border-radius: var(--r-lg);
+             padding: var(--p5); border-left: 3px solid transparent; transition: var(--ease);
+             cursor: pointer; }
+.seg-card:hover { border-color: var(--bdr2); transform: translateY(-1px); }
+.seg-opp   { border-left-color: var(--ok); }
+.seg-alert { border-left-color: var(--err); }
+.seg-funnel{ border-left-color: var(--sec); }
+.seg-rev   { border-left-color: var(--pri); }
+
+/* ================================================================
+   PROFILE DETAIL — BREADCRUMB
+================================================================ */
+.breadcrumb { display: flex; align-items: center; gap: var(--p2); margin-bottom: var(--p5);
+              font-size: var(--fs-sm); color: var(--tx-sub); }
+.breadcrumb button { background: none; border: 1px solid var(--bdr); color: var(--tx-sub);
+                     padding: 3px var(--p3); border-radius: var(--r); cursor: pointer;
+                     font-size: var(--fs-sm); transition: var(--ease); }
+.breadcrumb button:hover { background: var(--s2); color: var(--tx); }
+
+/* ================================================================
+   PROFILE DETAIL — RADAR CHART
+================================================================ */
+.radar-wrap { display: flex; justify-content: center; }
+
+/* ================================================================
+   PROFILE DETAIL — AI PRESCRIPTION CARDS
+================================================================ */
+.prx-card { padding: var(--p3) var(--p4); border-radius: var(--r); }
+.prx-nba  { background: rgba(99,102,241,.08);  border: 1px solid rgba(99,102,241,.22); }
+.prx-nla  { background: rgba(34,211,238,.07);  border: 1px solid rgba(34,211,238,.2); }

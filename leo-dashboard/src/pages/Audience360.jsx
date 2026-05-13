@@ -1,85 +1,115 @@
 import { useState } from 'react';
-import { PROFILES } from '../data/profiles';
-import { fetchProfileAffinity, adaptProfileData } from '../api/profile';
-import ProfileSearch   from '../components/audience/ProfileSearch';
-import ProfileCard     from '../components/audience/ProfileCard';
-import StatRow         from '../components/audience/StatRow';
-import AffinityChart   from '../components/audience/AffinityChart';
-import NBAList         from '../components/audience/NBAList';
-import EventTimeline   from '../components/audience/EventTimeline';
-import EmptyState      from '../components/ui/EmptyState';
-import Typing          from '../components/ui/Typing';
+import AudienceHub     from './AudienceHub';
+import TickerProfiles  from './TickerProfiles';
+import SegmentProfiles from './SegmentProfiles';
+import ProfileDetail   from './ProfileDetail';
+
+// view: 'hub' | 'ticker' | 'segment' | 'profile'
 
 export default function Audience360() {
-  const [pid,     setPid]   = useState(null);
-  const [profile, setP]     = useState(null);
-  const [loading, setLoad]  = useState(false);
+  const [view,          setView]          = useState('hub');
+  const [selectedTicker, setSelectedTicker] = useState(null);
+  const [selectedSeg,   setSelectedSeg]   = useState(null);
+  const [profileId,     setProfileId]     = useState(null);
+  const [backLabel,     setBackLabel]     = useState(null);  // breadcrumb label shown in ProfileDetail
+  const [searchLoading, setSearchLoading] = useState(false);
 
-  const search = async (id) => {
-    setLoad(true);
-    setP(null);
-    setPid(id);
+  // ── Navigation helpers ──────────────────────────────────────────────────────
 
-    const mock = PROFILES[id.toUpperCase()] ?? null;
-
-    try {
-      const data = await fetchProfileAffinity(id);
-      setP(adaptProfileData(data, mock));
-    } catch {
-      // API unreachable or returned an error — fall back to mock data
-      setP(mock);
-    } finally {
-      setLoad(false);
-    }
+  const goHub = () => {
+    setView('hub');
+    setSelectedTicker(null);
+    setSelectedSeg(null);
+    setProfileId(null);
+    setBackLabel(null);
   };
 
+  const goTicker = () => {
+    setView('ticker');
+    setProfileId(null);
+    setBackLabel(null);
+  };
+
+  const goSegment = () => {
+    setView('segment');
+    setProfileId(null);
+    setBackLabel(null);
+  };
+
+  // ── Entry points ────────────────────────────────────────────────────────────
+
+  const handleSearch = (id) => {
+    setProfileId(id);
+    setBackLabel(null);
+    setSelectedTicker(null);
+    setSelectedSeg(null);
+    setView('profile');
+  };
+
+  const openTicker = (tk) => {
+    setSelectedTicker(tk);
+    setSelectedSeg(null);
+    setView('ticker');
+  };
+
+  const openSegment = (seg) => {
+    setSelectedSeg(seg);
+    setSelectedTicker(null);
+    setView('segment');
+  };
+
+  const openProfile = (id, label = null) => {
+    setProfileId(id);
+    setBackLabel(label);
+    setView('profile');
+  };
+
+  // ── Determine back destination from ProfileDetail ──────────────────────────
+
+  const profileBack = selectedTicker
+    ? goTicker
+    : selectedSeg
+    ? goSegment
+    : goHub;
+
+  // ── Render ──────────────────────────────────────────────────────────────────
+
+  if (view === 'profile') {
+    return (
+      <ProfileDetail
+        profileId={profileId}
+        backLabel={backLabel}
+        onBack={profileBack}
+      />
+    );
+  }
+
+  if (view === 'ticker' && selectedTicker) {
+    return (
+      <TickerProfiles
+        ticker={selectedTicker}
+        onSelectProfile={openProfile}
+        onBack={goHub}
+      />
+    );
+  }
+
+  if (view === 'segment' && selectedSeg) {
+    return (
+      <SegmentProfiles
+        segment={selectedSeg}
+        onSelectProfile={openProfile}
+        onBack={goHub}
+      />
+    );
+  }
+
   return (
-    <div>
-      <div className="mb5">
-        <div className="xl sb mb2">Audience 360°</div>
-        <div className="sm sub">
-          Inspect customer profiles, interest affinity scores, and behavioral timelines in real-time.
-        </div>
-      </div>
-
-      <ProfileSearch onSearch={search} loading={loading} />
-
-      {loading && (
-        <div className="empty">
-          <Typing />
-          <div className="sm sub">Fetching profile from CDP…</div>
-        </div>
-      )}
-
-      {!loading && pid && !profile && (
-        <EmptyState
-          icon="🔍"
-          title="Profile not found"
-          subtitle={`No record for "${pid}" in CDP. Try USR001, USR002, or USR003.`}
-        />
-      )}
-
-      {!loading && profile && (
-        <>
-          <ProfileCard profile={profile} />
-          <StatRow stats={profile.stats} />
-          <div className="g2-col">
-            <div>
-              <AffinityChart interests={profile.interests} />
-              <NBAList nba={profile.nba} />
-            </div>
-            <EventTimeline events={profile.events} />
-          </div>
-        </>
-      )}
-
-      {!loading && !pid && (
-        <EmptyState
-          icon="👤"
-          title="Enter a Profile ID above"
-          subtitle="Inspect NBA scores, stock affinity, and behavioral events for any CDP customer."
-        />
-      )}
-    </div>
+    <AudienceHub
+      onSearch={handleSearch}
+      searchLoading={searchLoading}
+      onSelectTicker={openTicker}
+      onSelectSegment={openSegment}
+    />
   );
 }

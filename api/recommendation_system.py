@@ -81,8 +81,9 @@ router = APIRouter(
 
 # --- DEPENDENCIES ---
 def get_db():
+    """Yields a production PG connection for read-only audience views."""
     settings = DatabaseSettings()
-    conn = settings.get_pg_connection()
+    conn = settings.get_pg_connection_prod()
     try:
         yield conn
     finally:
@@ -356,6 +357,33 @@ def _get_profiles_for_segment(segment_name: str, conn: psycopg.Connection) -> Li
     with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
         cur.execute(_SQL_PROFILES_IN_SEGMENT, (segment_name,))
         return [SegmentProfileResponse(**row) for row in cur.fetchall()]
+
+
+# 5. SEGMENT PROFILES — all profiles belonging to a named CDP segment
+@router.get("/segment-profiles", response_model=List[SegmentProfileResponse])
+async def get_segment_profiles_endpoint(
+    segment: str = Query(..., description="CDP segment name (e.g. 'Production 1invest Users')"),
+    conn: psycopg.Connection = Depends(get_db),
+):
+    """
+    Returns all profiles that belong to the given CDP segment.
+    Queries cdp_profiles.segments JSONB array for an exact name match.
+    """
+    try:
+        cache_key = f"leo:rec:segment-profiles:{segment}"
+        cached = _cache_get(cache_key)
+        if cached:
+            logger.info(f"[Cache HIT] {cache_key}")
+            return [SegmentProfileResponse(**r) for r in json.loads(cached)]
+
+        logger.info(f"[Cache MISS] {cache_key}")
+        results = _get_profiles_for_segment(segment, conn)
+        _cache_set(cache_key, json.dumps([r.model_dump() for r in results]))
+        return results
+
+    except Exception as e:
+        logger.error(f"❌ Segment Profiles Error for '{segment}': {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # FIX 1: The path should just be "/webhook/zalo"
