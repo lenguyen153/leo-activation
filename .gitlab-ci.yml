@@ -46,7 +46,12 @@ build_core_api:
     - docker build -f services/ws_forwarder/Dockerfile --cache-from $CI_REGISTRY_IMAGE/ws-forwarder:latest -t $CI_REGISTRY_IMAGE/ws-forwarder:$CI_COMMIT_SHA -t $CI_REGISTRY_IMAGE/ws-forwarder:latest .
     - docker push $CI_REGISTRY_IMAGE/ws-forwarder:$CI_COMMIT_SHA
     - docker push $CI_REGISTRY_IMAGE/ws-forwarder:latest
-    
+
+    # Build and push Dashboard
+    - docker build -f services/dashboard/Dockerfile --cache-from $CI_REGISTRY_IMAGE/dashboard:latest -t $CI_REGISTRY_IMAGE/dashboard:$CI_COMMIT_SHA -t $CI_REGISTRY_IMAGE/dashboard:latest .
+    - docker push $CI_REGISTRY_IMAGE/dashboard:$CI_COMMIT_SHA
+    - docker push $CI_REGISTRY_IMAGE/dashboard:latest
+
   rules:
     - if: $CI_COMMIT_BRANCH
 
