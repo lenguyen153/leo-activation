@@ -12,13 +12,19 @@ class DatabaseSettings(BaseSettings):
     """
     
     # -------------------------
-    # PostgreSQL (Target)
+    # PostgreSQL (Target — default / UAT)
     # -------------------------
     PGSQL_DB_HOST: str = Field(default="localhost")
     PGSQL_DB_PORT: int = Field(default=5432)
     PGSQL_DB_NAME: str = Field(default="leo_cdp")
     PGSQL_DB_USER: str = Field(default="postgres")
     PGSQL_DB_PASSWORD: str
+
+    # -------------------------
+    # PostgreSQL (Production — read-only views)
+    # Only the host differs; all other credentials are shared.
+    # -------------------------
+    PGSQL_DB_HOST_PROD: str = Field(default="")
 
     # -------------------------
     # ArangoDB (Source)
@@ -39,26 +45,25 @@ class DatabaseSettings(BaseSettings):
         case_sensitive = True
         extra = "ignore" # Ignores other extra fields
 
-    @property
-    def pg_dsn(self) -> str:
-        """
-        Constructs a safe PostgreSQL connection string (DSN).
-        Handles special characters in the password and includes the port.
-        
-        Updates:
-        - Appends '?options=-c search_path=ag_catalog,public' 
-          to ensure Apache AGE functions are loaded and prioritized.
-        """
-        # Safely encode the password to handle characters like '@', '/', ':'
+    def _build_dsn(self, host: str) -> str:
         encoded_password = quote_plus(self.PGSQL_DB_PASSWORD)
-        
-        # We pass 'options' to set the search_path at connection time.
-        # This is strictly required for AGE to recognize graph syntax in SQL.
         return (
             f"postgresql://{self.PGSQL_DB_USER}:{encoded_password}@"
-            f"{self.PGSQL_DB_HOST}:{self.PGSQL_DB_PORT}/"
+            f"{host}:{self.PGSQL_DB_PORT}/"
             f"{self.PGSQL_DB_NAME}?options=-c%20search_path%3Dag_catalog,public"
         )
+
+    @property
+    def pg_dsn(self) -> str:
+        """Constructs the default (UAT) PostgreSQL DSN."""
+        return self._build_dsn(self.PGSQL_DB_HOST)
+
+    @property
+    def pg_dsn_prod(self) -> str:
+        """Constructs the production PostgreSQL DSN (read-only audience views).
+        Falls back to the default host if PGSQL_DB_HOST_PROD is not set."""
+        host = self.PGSQL_DB_HOST_PROD or self.PGSQL_DB_HOST
+        return self._build_dsn(host)
 
     def get_arango_db(self):
         """
@@ -85,10 +90,9 @@ class DatabaseSettings(BaseSettings):
         return db
         
     def get_pg_connection(self) -> psycopg.Connection:
-        """
-        Create a PostgreSQL connection using Settings.
-        """
-        return psycopg.connect(
-            self.pg_dsn,
-            row_factory=dict_row,
-        )
+        """Returns a connection to the default (UAT) PostgreSQL instance."""
+        return psycopg.connect(self.pg_dsn, row_factory=dict_row)
+
+    def get_pg_connection_prod(self) -> psycopg.Connection:
+        """Returns a connection to the production PostgreSQL instance (read-only use only)."""
+        return psycopg.connect(self.pg_dsn_prod, row_factory=dict_row)
