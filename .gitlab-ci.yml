@@ -91,7 +91,7 @@ deploy_production:
     
     - ssh-keyscan -H $PROD_SERVER_IP >> ~/.ssh/known_hosts
   script:
-    - ssh $PROD_USER@$PROD_SERVER_IP "export DOCKER_CONFIG=~/.docker-ci && mkdir -p ~/.docker-ci && echo '{}' > ~/.docker-ci/config.json && echo \"$CI_REGISTRY_PASSWORD\" | docker login -u \"$CI_REGISTRY_USER\" --password-stdin $CI_REGISTRY && cd /build/prod-app && bash deploy_blue_green.sh"
+    - ssh $PROD_USER@$PROD_SERVER_IP "export CI_REGISTRY_IMAGE=$CI_REGISTRY_IMAGE && export DOCKER_CONFIG=~/.docker-ci && mkdir -p ~/.docker-ci && echo '{}' > ~/.docker-ci/config.json && echo \"$CI_REGISTRY_PASSWORD\" | docker login -u \"$CI_REGISTRY_USER\" --password-stdin $CI_REGISTRY && cd /build/prod-app && bash deploy_blue_green.sh"
   environment:
     name: production
   rules:
