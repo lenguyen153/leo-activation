@@ -83,7 +83,7 @@ router = APIRouter(
 def get_db():
     """Yields a production PG connection for read-only audience views."""
     settings = DatabaseSettings()
-    conn = settings.get_pg_connection_prod()
+    conn = settings.get_pg_connection_api()
     try:
         yield conn
     finally:

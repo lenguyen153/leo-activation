@@ -18,6 +18,12 @@ export async function fetchTopEvents(profileId, topK = 10) {
   return apiFetch(`/user-events/top?profileId=${encodeURIComponent(profileId)}&topK=${topK}`);
 }
 
+// GET /portfolio/user?lookup=X&env=prod
+// Returns all profiles matching email, profile_id, or base_account_id.
+export async function searchProfiles(lookup) {
+  return apiFetch(`/portfolio/user?lookup=${encodeURIComponent(lookup)}&env=prod`);
+}
+
 // ── Adapters ────────────────────────────────────────────────────────────────
 
 // Adapts /recommendation/profile_affinity response to a UI-ready profile shape.

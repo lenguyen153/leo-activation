@@ -15,7 +15,7 @@ class DatabaseSettings(BaseSettings):
     # PostgreSQL (Target — default / UAT)
     # -------------------------
     PGSQL_DB_HOST: str = Field(default="localhost")
-    PGSQL_DB_PORT: int = Field(default=5432)
+    PGSQL_DB_PORT: int = Field(default=5435)
     PGSQL_DB_NAME: str = Field(default="leo_cdp")
     PGSQL_DB_USER: str = Field(default="postgres")
     PGSQL_DB_PASSWORD: str
@@ -27,9 +27,15 @@ class DatabaseSettings(BaseSettings):
     PGSQL_DB_HOST_PROD: str = Field(default="")
 
     # -------------------------
+    # API DB environment switch
+    # Set API_DB_ENV=local in .env to hit the local DB instead of prod.
+    # -------------------------
+    API_DB_ENV: str = Field(default="prod")
+
+    # -------------------------
     # ArangoDB (Source)
     # -------------------------
-    ARANGO_HOST: str = Field(default="http://localhost:8529")
+    ARANGO_HOST: str = Field(default="http://192.168.109.210:8529")
     ARANGO_DB: str = Field(default="leo_cdp_source")
     ARANGO_USER: str = Field(default="root")
     ARANGO_PASSWORD: str
@@ -96,3 +102,9 @@ class DatabaseSettings(BaseSettings):
     def get_pg_connection_prod(self) -> psycopg.Connection:
         """Returns a connection to the production PostgreSQL instance (read-only use only)."""
         return psycopg.connect(self.pg_dsn_prod, row_factory=dict_row)
+
+    def get_pg_connection_api(self) -> psycopg.Connection:
+        """Returns local or prod connection based on API_DB_ENV (.env switch)."""
+        if self.API_DB_ENV == "local":
+            return self.get_pg_connection()
+        return self.get_pg_connection_prod()

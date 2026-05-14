@@ -3,7 +3,7 @@ import Typing from '../ui/Typing';
 
 const QUICK_IDS = ['USR001', 'USR002', 'USR003'];
 
-export default function ProfileSearch({ onSearch, loading }) {
+export default function ProfileSearch({ onSearch, loading, error }) {
   const [val, setVal] = useState('');
 
   const go = (id) => {
@@ -17,7 +17,7 @@ export default function ProfileSearch({ onSearch, loading }) {
       <div className="f ac g3">
         <input
           className="inp f1"
-          placeholder="Enter profile ID (try USR001, USR002, USR003)"
+          placeholder="Search by profile ID, email, or account ID"
           value={val}
           onChange={e => setVal(e.target.value)}
           onKeyDown={e => e.key === 'Enter' && go(val.trim())}
@@ -27,9 +27,13 @@ export default function ProfileSearch({ onSearch, loading }) {
           onClick={() => go(val.trim())}
           disabled={loading || !val.trim()}
         >
-          {loading ? <Typing /> : 'Inspect →'}
+          {loading ? <Typing /> : 'Search →'}
         </button>
       </div>
+
+      {error && (
+        <div className="xs mt3" style={{ color: 'var(--err)' }}>{error}</div>
+      )}
 
       <div className="f g2 mt3 ac">
         <span className="xs dim">Quick load:</span>

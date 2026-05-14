@@ -55,8 +55,9 @@ router = APIRouter(
 
 # --- DEPENDENCIES ---
 def get_db():
+    """Production DB — portfolio endpoints are read-only."""
     settings = DatabaseSettings()
-    conn = settings.get_pg_connection()
+    conn = settings.get_pg_connection_api()
     try:
         yield conn
     finally:

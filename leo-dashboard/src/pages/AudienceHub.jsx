@@ -51,7 +51,7 @@ function SegmentCard({ seg, onSelect }) {
   );
 }
 
-export default function AudienceHub({ onSearch, searchLoading, onSelectSegment, onSelectTicker }) {
+export default function AudienceHub({ onSearch, searchLoading, searchError, onSelectSegment, onSelectTicker }) {
   const [tickers,      setTickers]      = useState([]);
   const [surgeLoading, setSurgeLoading] = useState(true);
 
@@ -94,7 +94,7 @@ export default function AudienceHub({ onSearch, searchLoading, onSelectSegment, 
       </div>
 
       {/* Profile Search — always visible */}
-      <ProfileSearch onSearch={onSearch} loading={searchLoading} />
+      <ProfileSearch onSearch={onSearch} loading={searchLoading} error={searchError} />
 
       {/* Top Interest Signals */}
       <div className="mb5">

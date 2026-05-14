@@ -59,7 +59,7 @@ def _cache_set(key: str, value: str) -> None:
 
 def get_db():
     settings = DatabaseSettings()
-    conn = settings.get_pg_connection_prod()
+    conn = settings.get_pg_connection_api()
     try:
         yield conn
     finally:
