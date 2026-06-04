@@ -1,5 +1,5 @@
 """
-CRUD + preview endpoints for the Rule-Based Campaign Engine.
+CRUD + preview + send endpoints for the Rule-Based Campaign Engine.
 
 Routes:
   POST   /campaigns/rules              — Create new rule
@@ -9,6 +9,7 @@ Routes:
   PATCH  /campaigns/rules/{rule_id}/status — Activate / pause / archive
   GET    /campaigns/rules/{rule_id}/runs   — Execution history
   POST   /campaigns/rules/{rule_id}/preview — Dry-run (matched count, no send)
+  POST   /campaigns/rules/{rule_id}/send   — Manual trigger (bypasses cron schedule)
 """
 
 import json
@@ -16,7 +17,7 @@ import logging
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from data_utils.settings import DatabaseSettings
@@ -59,6 +60,10 @@ class CampaignRuleUpdate(BaseModel):
 
 class StatusUpdate(BaseModel):
     status: str = Field(..., description="active | paused | archived")
+
+
+class SendRequest(BaseModel):
+    background: bool = Field(default=True, description="Run after response (non-blocking). Set false to wait for results.")
 
 
 # ============================================================
@@ -309,6 +314,98 @@ def preview_rule(rule_id: UUID):
         }
     finally:
         conn.close()
+
+
+@router.get("/runs")
+def list_runs(limit: int = Query(20, ge=1, le=100)):
+    """All recent campaign engine runs across all rules, newest first."""
+    conn = _get_conn()
+    try:
+        tenant_id = _get_tenant_id(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT run_id, started_at, finished_at,
+                       rules_evaluated, profiles_matched, sent, skipped, errored, run_metadata
+                FROM campaign_engine_runs
+                WHERE tenant_id = %s
+                ORDER BY started_at DESC
+                LIMIT %s
+                """,
+                (tenant_id, limit),
+            )
+            rows = cur.fetchall()
+        return {"count": len(rows), "runs": _serialize_rows(rows)}
+    finally:
+        conn.close()
+
+
+@router.get("/rules/{rule_id}/affected")
+def get_affected_profiles(
+    rule_id: UUID,
+    limit: int = Query(200, ge=1, le=1000),
+    status: str | None = Query(None, description="Filter by delivery_status: sent | failed | pending_retry"),
+):
+    """Profiles affected by a specific campaign rule (from delivery_log)."""
+    conn = _get_conn()
+    try:
+        tenant_id = _get_tenant_id(conn)
+
+        sql = """
+            SELECT dl.profile_id, dl.channel, dl.delivery_status, dl.sent_at,
+                   p.primary_email, p.first_name
+            FROM delivery_log dl
+            LEFT JOIN cdp_profiles p
+                ON dl.tenant_id = p.tenant_id AND dl.profile_id = p.profile_id
+            WHERE dl.tenant_id = %s
+              AND dl.marketing_event_id LIKE %s
+        """
+        params: list = [tenant_id, f"campaign_rule_{rule_id}%"]
+
+        if status:
+            sql += " AND dl.delivery_status = %s"
+            params.append(status)
+
+        sql += " ORDER BY dl.sent_at DESC NULLS LAST LIMIT %s"
+        params.append(limit)
+
+        with conn.cursor() as cur:
+            cur.execute(sql, params)
+            rows = cur.fetchall()
+
+        return {"rule_id": str(rule_id), "count": len(rows), "profiles": _serialize_rows(rows)}
+    finally:
+        conn.close()
+
+
+@router.post("/rules/{rule_id}/send", status_code=202)
+def send_rule_now(rule_id: UUID, background_tasks: BackgroundTasks, body: SendRequest | None = None):
+    """Manually trigger a campaign rule immediately, bypassing cron schedule."""
+    from data_workers.campaign_engine.engine import run_single_rule
+
+    conn = _get_conn()
+    try:
+        tenant_id = _get_tenant_id(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT rule_id FROM campaign_rules WHERE rule_id = %s AND tenant_id = %s",
+                (str(rule_id), tenant_id),
+            )
+            if not cur.fetchone():
+                raise HTTPException(status_code=404, detail="Rule not found")
+    finally:
+        conn.close()
+
+    use_background = body.background if body else True
+
+    if use_background:
+        background_tasks.add_task(run_single_rule, str(rule_id))
+        return {"status": "queued", "rule_id": str(rule_id)}
+
+    result = run_single_rule(str(rule_id))
+    if "error" in result:
+        raise HTTPException(status_code=500, detail=result["error"])
+    return result
 
 
 # ============================================================

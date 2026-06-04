@@ -247,6 +247,17 @@ def email_suggested_stock_dispatch(self, *, tenant_id: Optional[str] = None) -> 
 
 
 # --------------------------------------------------
+# Manual Campaign Send (on-demand)
+# --------------------------------------------------
+
+@shared_task(bind=True, max_retries=0)
+def send_campaign_now_task(self, rule_id: str, tenant_name: str | None = None) -> dict:
+    """Fire a single campaign rule immediately, bypassing cron schedule."""
+    from data_workers.campaign_engine.engine import run_single_rule
+    return run_single_rule(rule_id, tenant_name)
+
+
+# --------------------------------------------------
 # Fingerprint Cache Population (every 5 min)
 # --------------------------------------------------
 

@@ -13,10 +13,14 @@
 
 **What it does:**
 - Receives natural language queries → routes to the right tool via a small function-calling model → executes deterministic actions → returns synthesized responses
-- Syncs customer profiles from ArangoDB (source CDP) into PostgreSQL
-- Scores customer interest in real-time via a CDC pipeline (Kafka)
+- Syncs customer profiles and behavioral events from ArangoDB (source CDP) into PostgreSQL; backfills event history on demand
+- Scores customer interest in real-time via a CDC pipeline (Kafka); reconciles batch scores on schedule
 - Activates marketing campaigns across Email, Zalo OA, Facebook, Mobile Push, Web Push
-- Provides an alert center and recommendation system (next-best-action, interest scoring)
+- Runs a rule-based campaign engine on cron schedules with frequency capping, circuit-breaker protection, and immediate-send override
+- Provides next-best-action (NBA) recommendations and next-likely-action (NLA) predictions (XGBoost model) per profile
+- Polls market snapshots from Redis into PostgreSQL and computes volume analytics for ticker-level affinity scoring
+- Builds and maintains PGVector embeddings for semantic (RAG) agent reasoning
+- Serves a React dashboard (AudienceHub, Audience360, CampaignEngine, ProfileDetail, TickerProfiles, SegmentProfiles, SearchResults)
 
 ---
 
@@ -49,7 +53,9 @@
 - `structlog` — structured JSON logging
 - `prometheus-client` / `prometheus-fastapi-instrumentator` — metrics & observability
 
-**Infrastructure:** Docker Compose (API, Redis, Celery worker/beat, Ngrok tunnel, Kafka/Zookeeper, CDC microservices)
+**Frontend:** React 18 + Vite SPA (`leo-dashboard/`) — served via Nginx; pages: AudienceHub, Audience360, CampaignEngine, ProfileDetail, TickerProfiles, SegmentProfiles, SearchResults
+
+**Infrastructure:** Docker Compose (API, Redis, Celery worker/beat, Ngrok tunnel, Kafka/Zookeeper, CDC microservices); `docker-compose.prod.cdc.yml` for CDC-only deployments
 
 ---
 
@@ -75,39 +81,55 @@ leo-activation/
 ├── main_configs.py              # All env-based configuration
 ├── api/                         # FastAPI app factory + route handlers
 │   ├── app_factory.py
-│   ├── handlers.py              # All REST endpoints
-│   └── recommendation_system.py # Recommendation API routes
+│   ├── handlers.py              # Core endpoints (/chat, /tool_calling, /data/sync-segment, /test/zalo-direct)
+│   ├── recommendation_system.py # /recommendation/* routes
+│   ├── audience.py              # /audience/* segment routes
+│   ├── campaign_rules.py        # /campaigns/rules CRUD + preview + runs + affected + send
+│   ├── notification.py          # /notification/send
+│   ├── portfolio.py             # /portfolio/user + /portfolio/accounts
+│   └── user_events.py           # /user-events/* routes
 ├── agentic_models/              # LLM integration layer
 │   ├── function_gemma.py        # FunctionGemma 270M (tool routing)
 │   ├── gemini.py                # Gemini SDK wrapper
 │   └── router.py                # AgentRouter — orchestrates the 4-step loop
 ├── agentic_tools/               # Tool registry & execution
-│   ├── tools.py                 # 9 registered tools (explicit, no hidden prompts)
+│   ├── tools.py                 # Registered tools (explicit, no hidden prompts)
 │   ├── channels/                # Strategy pattern: email, zalo, facebook, push
+│   │   └── templates/           # Per-channel message templates (email/stock_picks, zalo/stock_picks, zalo/suggested_stock)
 │   ├── recommendation_system/   # Interest scoring, predictive/prescriptive engines
-│   └── *.py                     # Domain tools (customer, marketing, alerts, weather)
+│   ├── recommendation_orchestrator.py  # Orchestrates NBA/NLA/interest-score pipelines
+│   └── *.py                     # Domain tools (customer, marketing, alerts, weather, data_enrichment)
 ├── data_models/                 # SQLAlchemy ORM models & Pydantic schemas
 ├── data_utils/                  # DB connection factory & settings
 ├── agentic_resources/           # Static files and Jinja2 web templates (served at /resources)
 ├── data_services/               # Business logic services (alerts)
 ├── data_workers/                # Celery tasks and background workers
 │   ├── tasks.py                 # All registered Celery tasks
-│   ├── campaign_engine/         # Rule-based campaign engine (circuit breaker, dispatcher, frequency cap)
-│   ├── repositories/            # Data-access layer (Arango + PG profile repos)
-│   ├── scripts/                 # One-off / maintenance scripts (backfill, batch scoring, etc.)
-│   └── sync/                    # Profile & portfolio sync services
+│   ├── campaign_engine/         # Rule-based campaign engine (circuit breaker, condition evaluator, dispatcher, frequency cap)
+│   ├── repositories/            # Data-access layer (arango_profile_repository, pg_profile_repository)
+│   ├── scripts/                 # One-off / maintenance scripts (backfill, batch scoring, abandoned cart, embedding, market snapshot, behavioral events, etc.)
+│   └── sync/                    # Profile & portfolio sync services (arango-to-PG, segment, active-user portfolios)
 ├── services/                    # CDC microservices (independent containers)
 │   ├── cdc_poller/              # Polls ArangoDB for changes → Kafka
 │   ├── scoring_consumer/        # Consumes Kafka → computes scores → PG
 │   ├── nba_publisher/           # Next-Best-Action publisher
 │   ├── ws_forwarder/            # WebSocket forwarder — streams CDC events to external services
 │   └── shared/                  # Shared Kafka utils & schemas
+├── leo-dashboard/               # React 18 + Vite frontend SPA (served via Nginx)
+│   └── src/
+│       ├── pages/               # AudienceHub, Audience360, CampaignEngine, ProfileDetail, TickerProfiles, SegmentProfiles, SearchResults
+│       ├── components/          # audience/, campaign/, chatbot/, layout/, ui/ components
+│       └── api/                 # API client modules (campaign, chat, profile, pulse)
+├── nla_model/                   # Next-Likely-Action XGBoost model pipeline
+│   ├── scripts/                 # build_df_train.py, train_nla.py, eda_propensity.py
+│   ├── output/                  # Trained model artifact (nla_model.json) + EDA charts
+│   └── docs/                    # EDA reports (EDA_XGBoost_Report.md)
 ├── sql-scripts/                 # DDL schema, test data, use cases
-├── scripts/                     # One-off maintenance scripts
 ├── shell-scripts/               # Dev/prod startup scripts
 ├── tests/                       # Pytest test suites
 ├── docs/                        # Architecture, DB, tools reference docs
-└── docker-compose.yml           # Full stack: API, Redis, Celery, Kafka, CDC services
+├── docker-compose.yml           # Full stack: API, Redis, Celery, Kafka, CDC services
+└── docker-compose.prod.cdc.yml  # CDC-only production compose
 ```
 
 ### Key API Endpoints
@@ -115,11 +137,19 @@ leo-activation/
 - `POST /chat` — Main agentic interface (natural language → tool → response)
 - `POST /tool_calling` — Direct tool invocation (bypasses agent)
 - `POST /data/sync-segment` — Trigger profile sync from ArangoDB
-- `GET /recommendation/interested/{ticker}` — Users interested in a ticker
+- `POST /test/zalo-direct` — Test Zalo OA direct message send (dev/debug)
+- `GET /recommendation/interested/{ticker}` — Users interested in a ticker (default env)
+- `GET /recommendation/interested-prod/{ticker}` — Users interested in a ticker (prod env)
+- `GET /recommendation/interested-uat/{ticker}` — Users interested in a ticker (UAT env)
 - `GET /recommendation/profile_affinity/{profile_id}` — 360° profile interest view
 - `GET /recommendation/nba/{profile_id}` — Next-best-action recommendations
 - `GET /recommendation/nla/{profile_id}` — Next-likely-action predictions
+- `GET /recommendation/segment-profiles` — Profiles for a given segment
 - `POST /recommendation/webhook/zalo` — Zalo OA webhook receiver
+- `GET /audience/high-affinity` — High-affinity customer profiles
+- `GET /audience/churn-risk` — Profiles with churn-risk signals
+- `GET /audience/new-investors` — New investor profiles
+- `GET /audience/active-traders` — Active trader profiles
 - `GET /portfolio/user` — User portfolio data
 - `GET /portfolio/accounts` — Account-level portfolio data
 - `POST /notification/send` — Send a notification via configured channel
@@ -131,7 +161,10 @@ leo-activation/
 - `PUT /campaigns/rules/{rule_id}` — Update rule
 - `PATCH /campaigns/rules/{rule_id}/status` — Enable / disable rule
 - `GET /campaigns/rules/{rule_id}/runs` — Execution history for a rule
+- `GET /campaigns/runs` — List all campaign run history (across all rules)
 - `POST /campaigns/rules/{rule_id}/preview` — Dry-run a rule against audience
+- `GET /campaigns/rules/{rule_id}/affected` — List profiles that will be targeted by a rule
+- `POST /campaigns/rules/{rule_id}/send` — Trigger immediate send for a rule (bypasses schedule)
 
 ---
 

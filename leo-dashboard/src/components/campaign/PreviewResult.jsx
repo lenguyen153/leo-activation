@@ -1,9 +1,29 @@
+import { useState } from 'react';
 import { SEGMENT_SIZE } from '../../data/segments';
+import { triggerCampaign } from '../../api/campaign';
 
-export default function PreviewResult({ preview, name, channels, seg, freqCap }) {
+export default function PreviewResult({ preview, name, channels, seg, freqCap, ruleId }) {
+  const [sending,    setSending]    = useState(false);
+  const [sendResult, setSendResult] = useState(null);
+  const [sendError,  setSendError]  = useState(null);
+
   if (!preview) return null;
 
   const convRate = ((preview.convs / preview.reach) * 100).toFixed(1);
+
+  const handleSend = async () => {
+    setSending(true);
+    setSendResult(null);
+    setSendError(null);
+    try {
+      const res = await triggerCampaign(ruleId);
+      setSendResult(res);
+    } catch (e) {
+      setSendError(e.message || 'Send failed');
+    } finally {
+      setSending(false);
+    }
+  };
 
   return (
     <div className="prev-box">
@@ -50,11 +70,29 @@ export default function PreviewResult({ preview, name, channels, seg, freqCap })
         </span>
       </div>
 
-      <div className="f g3 mt4 je fw">
+      <div className="f g3 mt4 je fw ac">
         <button className="btn btn-g btn-s">Save Draft</button>
-        <button className="btn btn-p btn-s" style={{ opacity: .5, cursor: 'not-allowed' }}>
-          Launch (requires approval)
-        </button>
+
+        {sendResult ? (
+          <span className="xs ok">
+            ✓&nbsp;
+            {sendResult.status === 'queued'
+              ? 'Campaign queued — check Runs for results'
+              : `${sendResult.sent ?? 0} sent · ${sendResult.failed ?? 0} failed · ${sendResult.skipped ?? 0} skipped`}
+          </span>
+        ) : (
+          <button
+            className="btn btn-p btn-s"
+            onClick={handleSend}
+            disabled={sending || !ruleId}
+          >
+            {sending ? 'Sending…' : '🚀 Send Now'}
+          </button>
+        )}
+
+        {sendError && (
+          <span className="xs" style={{ color: 'var(--err)' }}>{sendError}</span>
+        )}
       </div>
     </div>
   );

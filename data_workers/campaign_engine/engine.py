@@ -407,6 +407,98 @@ def run_campaign_engine(tenant_name: str | None = None) -> dict:
     return totals
 
 
+def run_single_rule(rule_id: str, tenant_name: str | None = None) -> dict:
+    """
+    Manual trigger: run one campaign rule immediately, bypassing cron schedule.
+    Works on rules of any status (active or paused).
+    """
+    settings = DatabaseSettings()
+    conn = settings.get_pg_connection()
+
+    try:
+        redis_client = redis.from_url(REDIS_URL, socket_connect_timeout=5)
+        redis_client.ping()
+    except Exception as e:
+        logger.warning("[Engine] Redis unavailable (%s) — frequency caps and circuit breaker disabled", e)
+        redis_client = None
+
+    target_tenant = tenant_name or os.getenv("TARGET_TENANT", "master")
+    today_str = date.today().isoformat()
+    run_started = datetime.now(timezone.utc)
+
+    from agentic_tools.recommendation_system.interest_score import resolve_ids
+    try:
+        tenant_uuid, _ = resolve_ids(conn, target_tenant, os.getenv("TARGET_SEGMENT", "Active in last 3 months"))
+        tenant_id = str(tenant_uuid)
+    except Exception as e:
+        logger.error("[Engine] Failed to resolve tenant '%s': %s", target_tenant, e)
+        conn.close()
+        return {"error": str(e)}
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT rule_id, rule_name, conditions, channel, template_id,
+                   message_config, frequency_cap, schedule_cron, audience_filter, priority
+            FROM campaign_rules
+            WHERE rule_id = %s AND tenant_id = %s
+            """,
+            (rule_id, tenant_id),
+        )
+        rule = cur.fetchone()
+
+    if not rule:
+        conn.close()
+        return {"error": f"Rule {rule_id} not found"}
+
+    try:
+        rule_stats = _process_rule(conn, redis_client, rule, tenant_id, today_str)
+        run_finished = datetime.now(timezone.utc)
+
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO campaign_engine_runs
+                    (tenant_id, started_at, finished_at,
+                     rules_evaluated, profiles_matched, sent, skipped, errored, run_metadata)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    tenant_id, run_started, run_finished,
+                    1, rule_stats.get("matched", 0),
+                    rule_stats.get("sent", 0), rule_stats.get("skipped", 0), rule_stats.get("errored", 0),
+                    json.dumps([rule_stats]),
+                ),
+            )
+        conn.commit()
+
+        log_event(logger, "campaign_rule_manual_send",
+                  rule_id=rule_id,
+                  matched=rule_stats.get("matched", 0),
+                  sent=rule_stats.get("sent", 0),
+                  skipped=rule_stats.get("skipped", 0),
+                  errored=rule_stats.get("errored", 0),
+                  duration_ms=round((run_finished - run_started).total_seconds() * 1000))
+
+        return {
+            "rule_id": rule_id,
+            "matched": rule_stats.get("matched", 0),
+            "sent": rule_stats.get("sent", 0),
+            "failed": rule_stats.get("errored", 0),
+            "skipped": rule_stats.get("skipped", 0),
+            "started_at": run_started.isoformat(),
+            "finished_at": run_finished.isoformat(),
+        }
+
+    except Exception as e:
+        logger.exception("[Engine] Fatal error in manual send rule_id=%s", rule_id)
+        conn.rollback()
+        return {"error": str(e)}
+
+    finally:
+        conn.close()
+
+
 # Allow direct invocation: python -m data_workers.campaign_engine.engine
 if __name__ == "__main__":
     result = run_campaign_engine()
