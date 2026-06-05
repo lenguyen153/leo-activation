@@ -50,7 +50,7 @@ Social Backend → LEO Activation REST API
 
 **Identity path (one-time at login):**
 ```
-Social Backend → GET /identity/resolve?phone= | ?email=
+Social Backend → GET /identity/resolve?email= | ?username=
               ← { profile_id, tenant_id }
 Social Backend caches profile_id locally — does not call again per session
 ```
@@ -102,13 +102,13 @@ Add weight mappings for the 9 new social event types. Extend the existing event-
 
 ```
 GET /identity/resolve?email=<email>
-GET /identity/resolve?phone=<phone>
+GET /identity/resolve?username=<username>
 
 Response: { "profile_id": "...", "tenant_id": "..." }
 Errors:   404 if not found, 400 if neither param provided
 ```
 
-- Queries PostgreSQL `profile` table (or equivalent) by `primary_email` or `phone`
+- Queries PostgreSQL `profile` table by `email` or `username` (`display_name` is not a lookup key)
 - Respects existing RLS — tenant-scoped query
 - Register router in `api/handlers.py` under prefix `/identity`
 
@@ -121,7 +121,7 @@ GET /social/trending-tickers?limit=20
 Response: [{ "ticker": "VNM", "post_count": 142, "reaction_count": 89, "score": 9.4 }]
 ```
 
-- Aggregates social event counts from PostgreSQL scoring/event tables over a rolling 24h window
+- Aggregates social event counts from PostgreSQL scoring/event tables over a rolling 24h window (UTC)
 - Score = weighted sum of `social_post`, `ticker_reaction`, `discussion_comment` counts
 - Register router in `api/handlers.py` under prefix `/social`
 
@@ -157,8 +157,8 @@ Response: [{ "ticker": "VNM", "post_count": 142, "reaction_count": 89, "score": 
 
 ---
 
-## 9. Open Questions
+## 9. Resolved Decisions
 
-- What is the exact field name for phone/email in the LEO PG profile table? (needed for `/identity/resolve` query)
-- What is the 24h rolling window clock — UTC or Vietnam timezone?
-- Should `/social/trending-tickers` be authenticated or public?
+- **Identity lookup fields:** `email` and `username` only — no phone field exists in the profile table
+- **Trending tickers window:** UTC
+- **Auth:** All endpoints are protected by Keycloak at the infrastructure level — no per-endpoint auth logic needed
