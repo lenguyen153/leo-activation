@@ -4,7 +4,7 @@
 
 **Goal:** Add 3 focused changes to LEO Activation so the social platform can track behavioral events through the existing CDC pipeline, resolve user identity, and fetch trending tickers.
 
-**Architecture:** Social events from Flutter (via leo-cdp-framework SDK) flow through ArangoDB → CDC poller → Kafka → scoring consumer unchanged. The scoring consumer gains a weight-override function for 9 new social metric names. Two new FastAPI routers (`/identity` and `/social`) are registered in handlers.py alongside existing routers.
+**Architecture:** Social events from Flutter (via leo-cdp-framework SDK) flow through ArangoDB → CDC poller → Kafka → scoring consumer. Three files gate this pipeline: `filters.py` (whitelist of which metric names the poller publishes), `interest_score.py` (exclusion list to prevent batch double-counting), and `consumer.py` (where weights are applied). All three must be updated. Two new FastAPI routers (`/identity` and `/social`) are registered in handlers.py alongside existing routers.
 
 **Tech Stack:** Python 3.10+, FastAPI, psycopg v3, pytest, existing `DatabaseSettings` / `get_db()` pattern from `api/audience.py`.
 
@@ -16,7 +16,9 @@
 
 | File | Action | Purpose |
 |---|---|---|
-| `services/scoring_consumer/consumer.py` | Modify | Add `_social_metric_score()` + integrate into main loop |
+| `services/cdc_poller/filters.py` | Modify | Add 9 social metric names to CDC whitelist so the poller publishes them to Kafka |
+| `agentic_tools/recommendation_system/interest_score.py` | Modify | Add 9 social metric names to batch exclusion list to prevent double-counting |
+| `services/scoring_consumer/consumer.py` | Modify | Add `_social_metric_score()` override — assigns real weights because `cdp_eventmetric` returns 0.0 for unknown metric names |
 | `api/identity.py` | Create | `GET /identity/resolve` endpoint |
 | `api/social.py` | Create | `GET /social/trending-tickers` endpoint |
 | `api/handlers.py` | Modify | Register identity and social routers |
@@ -26,25 +28,31 @@
 
 ---
 
-## Task 1: Social Event Weight Function
+## Task 1: Wire Social Events Through the CDC Pipeline
 
-Social events from the Flutter SDK arrive in the scoring consumer with `metric_name` values like `social_post`, `ticker_follow`, etc. The consumer currently uses `event.metric_score` (set by the CDP framework) directly. We add `_social_metric_score()` — a pure function that returns a fixed weight for known social metric names, or `None` for unknown names (letting the original CDP score pass through unchanged).
+Three files form a chain that all must be updated. Here is why each one matters:
 
-**Weight table:**
+- **`filters.py`** — CDC poller whitelist. Social metric names not in `CDC_METRIC_NAMES` are silently dropped by `should_publish()` before they ever reach Kafka. This is the first gate.
+- **`interest_score.py`** — Batch job exclusion list. Once social events go through real-time CDC, they must be excluded from batch scoring to avoid double-counting. This is the same constant name but serves the opposite purpose.
+- **`consumer.py`** — Weight application. The transformer (`transformer.py:40`) calls `get_metric_score(metric_name)` which reads from an in-memory cache of `cdp_eventmetric` (ArangoDB). Social events have no `cdp_eventmetric` entries yet, so `get_metric_score` returns **0.0** — the event arrives at the consumer but adds zero points. The override function assigns real weights. Duration-based events additionally need to read `event_data.duration_ms` — a fixed `cdp_eventmetric` score can never do this.
 
-| metric_name | weight | rationale |
+**Weight table** (calibrated against `SCORING_K_FACTOR = 50.0` — to reach `interest_score = 0.5`, a profile needs 50 raw points):
+
+| metric_name | weight | type |
 |---|---|---|
-| `social_post` | 8.0 | Explicit ticker mention — highest intent |
-| `ticker_follow` | 7.0 | Explicit subscription signal |
-| `ticker_reaction` | 5.0 | Directional sentiment (bullish/bearish/like) |
-| `social_share` | 5.0 | Social amplification |
-| `social_bookmark` | 3.0 | Save for later |
-| `discussion_comment` | 3.0 | Engaged participation |
-| `ticker_page_view` | duration-scaled | `min(duration_ms, 30000) / 30000 * 2.0` |
-| `social_feed_view` | duration-scaled | `min(duration_ms, 30000) / 30000 * 1.0` |
-| `discussion_view` | duration-scaled | `min(duration_ms, 30000) / 30000 * 1.0` |
+| `social_post` | 8.0 | fixed |
+| `ticker_follow` | 7.0 | fixed |
+| `ticker_reaction` | 5.0 | fixed |
+| `social_share` | 5.0 | fixed |
+| `social_bookmark` | 3.0 | fixed |
+| `discussion_comment` | 3.0 | fixed |
+| `ticker_page_view` | `min(duration_ms, 30000) / 30000 * 2.0` | duration-scaled |
+| `social_feed_view` | `min(duration_ms, 30000) / 30000 * 1.0` | duration-scaled |
+| `discussion_view` | `min(duration_ms, 30000) / 30000 * 1.0` | duration-scaled |
 
 **Files:**
+- Modify: `services/cdc_poller/filters.py`
+- Modify: `agentic_tools/recommendation_system/interest_score.py`
 - Modify: `services/scoring_consumer/consumer.py`
 - Create: `tests/test_social_event_weights.py`
 
@@ -95,7 +103,6 @@ def test_discussion_comment_returns_fixed_weight():
 
 
 def test_ticker_page_view_full_duration():
-    # 30 seconds or more → max weight 2.0
     score = _social_metric_score("ticker_page_view", {"duration_ms": 30000})
     assert score == pytest.approx(2.0)
 
@@ -106,7 +113,6 @@ def test_ticker_page_view_half_duration():
 
 
 def test_ticker_page_view_exceeds_cap():
-    # duration_ms capped at 30000
     score = _social_metric_score("ticker_page_view", {"duration_ms": 999999})
     assert score == pytest.approx(2.0)
 
@@ -127,7 +133,7 @@ def test_discussion_view_half_duration():
 
 
 def test_unknown_metric_returns_none():
-    # Non-social events must pass through unchanged
+    # Non-social events must pass through unchanged — CDP score is used as-is
     assert _social_metric_score("ticker-view", {}) is None
     assert _social_metric_score("order-created", {}) is None
     assert _social_metric_score("watchlist-add", {}) is None
@@ -145,14 +151,65 @@ cd /home/nguyen/projects/work/leo-activation
 pytest tests/test_social_event_weights.py -v
 ```
 
-Expected: `ImportError` or `AttributeError` — `_social_metric_score` does not exist yet.
+Expected: `ImportError` — `_social_metric_score` does not exist yet.
 
-- [ ] **Step 3: Add `_social_metric_score()` to consumer.py**
+- [ ] **Step 3: Add social metric names to `filters.py` whitelist**
 
-Open `services/scoring_consumer/consumer.py`. After the `_forward_pool` line (line 61), add:
+In `services/cdc_poller/filters.py`, extend `CDC_METRIC_NAMES`:
 
 ```python
-# --- Social event weight overrides ---
+CDC_METRIC_NAMES = frozenset({
+    "ticker-view",
+    "ticker-pin",
+    "ticker-unpin",
+    "watchlist-add",
+    "order-created",
+    "order-preview",
+    "order-canceled",
+    # Social platform events
+    "social_post",
+    "ticker_follow",
+    "ticker_reaction",
+    "social_share",
+    "social_bookmark",
+    "discussion_comment",
+    "ticker_page_view",
+    "social_feed_view",
+    "discussion_view",
+})
+```
+
+- [ ] **Step 4: Add social metric names to `interest_score.py` exclusion list**
+
+In `agentic_tools/recommendation_system/interest_score.py`, extend `CDC_METRIC_NAMES`:
+
+```python
+CDC_METRIC_NAMES = [
+    "ticker-view",
+    "watchlist-add",
+    "order-created",
+    "order-preview",
+    "order-canceled",
+    # Social platform events — handled by real-time CDC, excluded from batch
+    "social_post",
+    "ticker_follow",
+    "ticker_reaction",
+    "social_share",
+    "social_bookmark",
+    "discussion_comment",
+    "ticker_page_view",
+    "social_feed_view",
+    "discussion_view",
+]
+```
+
+- [ ] **Step 5: Add `_social_metric_score()` to `consumer.py`**
+
+In `services/scoring_consumer/consumer.py`, after the `_forward_pool` line (line 61), add:
+
+```python
+# Social event weight overrides — cdp_eventmetric returns 0.0 for unknown
+# metric names; these values assign real weights without requiring ArangoDB config.
 _SOCIAL_FIXED_WEIGHTS: dict[str, float] = {
     "social_post": 8.0,
     "ticker_follow": 7.0,
@@ -169,7 +226,7 @@ _SOCIAL_DURATION_WEIGHTS: dict[str, float] = {
 
 
 def _social_metric_score(metric_name: str, event_data: dict) -> float | None:
-    """Return a fixed weight for known social metric names, or None to use CDP score."""
+    """Return a LEO-defined weight for social events, or None to use CDP score."""
     if metric_name in _SOCIAL_FIXED_WEIGHTS:
         return _SOCIAL_FIXED_WEIGHTS[metric_name]
     if metric_name in _SOCIAL_DURATION_WEIGHTS:
@@ -179,9 +236,9 @@ def _social_metric_score(metric_name: str, event_data: dict) -> float | None:
     return None
 ```
 
-- [ ] **Step 4: Integrate into the consumer main loop**
+- [ ] **Step 6: Integrate `_social_metric_score()` into the consumer main loop**
 
-In `services/scoring_consumer/consumer.py`, find the comment `# 5. Compute incremental score` (around line 197). Change:
+In `services/scoring_consumer/consumer.py`, find `# 5. Compute incremental score` (around line 197). Change:
 
 ```python
                     # 5. Compute incremental score
@@ -202,7 +259,7 @@ to:
                     )
 ```
 
-- [ ] **Step 5: Run tests to verify they pass**
+- [ ] **Step 7: Run tests to verify they pass**
 
 ```bash
 pytest tests/test_social_event_weights.py -v
@@ -210,11 +267,14 @@ pytest tests/test_social_event_weights.py -v
 
 Expected: All 14 tests PASS.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
-git add services/scoring_consumer/consumer.py tests/test_social_event_weights.py
-git commit -m "feat: add social event weight overrides to scoring consumer"
+git add services/cdc_poller/filters.py \
+        agentic_tools/recommendation_system/interest_score.py \
+        services/scoring_consumer/consumer.py \
+        tests/test_social_event_weights.py
+git commit -m "feat: wire social events through CDC pipeline with scoring weights"
 ```
 
 ---
