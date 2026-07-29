@@ -148,6 +148,7 @@ async def _interested_by_segment(
     min_score: float,
     conn: psycopg.Connection,
     segment_name: Optional[str] = None,
+    journey_map_name: Optional[str] = None,
 ) -> List[InterestedUserResponse]:
     target_tenant = os.getenv("TARGET_TENANT", "master")
     tenant_uuid, _ = resolve_ids(conn, target_tenant, "Active in last 3 months")
@@ -155,6 +156,10 @@ async def _interested_by_segment(
 
     if segment_name:
         allowed_ids = {p.profile_id for p in _get_profiles_for_segment(segment_name, conn)}
+        raw_results = [r for r in raw_results if r["profile_id"] in allowed_ids]
+
+    if journey_map_name:
+        allowed_ids = {p.profile_id for p in _get_profiles_for_journey_map(journey_map_name, conn)}
         raw_results = [r for r in raw_results if r["profile_id"] in allowed_ids]
 
     return [InterestedUserResponse(**r) for r in raw_results]
@@ -165,18 +170,27 @@ async def _interested_by_segment(
 async def get_interested_users_endpoint(
     ticker: str,
     min_score: float = Query(0.5, description="Minimum score 0.0-1.0"),
+    journey_map_name: Optional[str] = Query(
+        None,
+        description=(
+            "Filter to profiles enrolled in this CDP journey map (exact name match against "
+            "cdp_profiles.journey_maps[*].name). Omit to return users regardless of journey map. "
+            "Journey map names currently present in production: "
+            "'1 INVEST JOURNEY MAP', 'DEMO & TEST', '1INVEST SOCIAL', 'UAT 1INVEST', '1INVEST MOBILE'."
+        ),
+    ),
     conn: psycopg.Connection = Depends(get_db)
 ):
-    """Finds all users interested in a ticker regardless of segment."""
+    """Finds all users interested in a ticker regardless of segment, optionally filtered to one journey map."""
     try:
-        cache_key = f"leo:rec:interested:all:{ticker}:{min_score}"
+        cache_key = f"leo:rec:interested:all:{ticker}:{min_score}:{journey_map_name or 'any'}"
         cached = _cache_get(cache_key)
         if cached:
             logger.info(f"[Cache HIT] {cache_key}")
             return [InterestedUserResponse(**r) for r in json.loads(cached)]
 
         logger.info(f"[Cache MISS] {cache_key}")
-        results = await _interested_by_segment(ticker, min_score, conn)
+        results = await _interested_by_segment(ticker, min_score, conn, journey_map_name=journey_map_name)
         _cache_set(cache_key, json.dumps([r.model_dump() for r in results]))
         return results
     except Exception as e:
@@ -356,6 +370,19 @@ _SQL_PROFILES_IN_SEGMENT = """
 def _get_profiles_for_segment(segment_name: str, conn: psycopg.Connection) -> List[SegmentProfileResponse]:
     with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
         cur.execute(_SQL_PROFILES_IN_SEGMENT, (segment_name,))
+        return [SegmentProfileResponse(**row) for row in cur.fetchall()]
+
+
+_SQL_PROFILES_IN_JOURNEY_MAP = """
+    SELECT profile_id, primary_email
+    FROM cdp_profiles
+    WHERE journey_maps @> jsonb_build_array(jsonb_build_object('name', %s::text))
+"""
+
+
+def _get_profiles_for_journey_map(journey_map_name: str, conn: psycopg.Connection) -> List[SegmentProfileResponse]:
+    with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
+        cur.execute(_SQL_PROFILES_IN_JOURNEY_MAP, (journey_map_name,))
         return [SegmentProfileResponse(**row) for row in cur.fetchall()]
 
 
