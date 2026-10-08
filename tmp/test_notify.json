@@ -1,0 +1,9 @@
+  {
+    "user_id": "999C000022",
+    "subject": "Cảnh báo chỉ số",
+    "content": "Cảnh báo chỉ số: TK:inno02, TG: 16/06/2025 14:35:06, TT: VN30, Chỉ số TT 133409.0, >= 10.0",
+    "topic_code": "3",
+    "push": {
+      "data": "2|20250616-143506|VN30|133409.0|10.0|3"
+    }
+  }
