@@ -16,6 +16,7 @@ class CdpEventMessage(BaseModel):
     metric_score: float = Field(default=0.0, description="Score from cdp_eventmetric")
     created_at: str = Field(..., description="ISO-8601 timestamp from the tracking event")
     event_data: dict = Field(default_factory=dict, description="Raw eventData from ArangoDB")
+    journey_id: str = Field(default="", description="refJourneyId of the tracking event (source webapp)")
 
 
 class ScoreUpdateMessage(BaseModel):
@@ -31,6 +32,7 @@ class ScoreUpdateMessage(BaseModel):
     score_delta: float = Field(default=0.0, description="Change from previous interest_score")
     updated_at: str
     event_data: dict = Field(default_factory=dict, description="Raw eventData from cdp_trackingevent")
+    journey_id: str = Field(default="", description="refJourneyId of the source tracking event")
 
 
 class ScoredEventForward(BaseModel):

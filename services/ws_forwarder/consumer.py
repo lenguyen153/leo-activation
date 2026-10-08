@@ -93,6 +93,7 @@ def scrub_pii(payload: dict) -> dict:
         "base_account_id": payload.get("base_account_id"),
         "ticker": payload.get("ticker"),
         "metric_name": payload.get("metric_name"),
+        "journey_id": payload.get("journey_id"),
         "event_payload": payload.get("event_data", {}),
         "updated_at": payload.get("updated_at"),
     }

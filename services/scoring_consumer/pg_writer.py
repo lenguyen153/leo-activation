@@ -131,11 +131,16 @@ def validate_profile(conn, profile_id: str) -> bool:
 
 
 def fetch_base_account_id(conn, profile_id: str) -> str | None:
-    """Resolve profile_id → base_account_id via the portfolios table."""
+    """Resolve profile_id → base_account_id via portfolios, then cdp_profiles.ext_data."""
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT base_account_id FROM portfolios WHERE profile_id = %s LIMIT 1",
-            (profile_id,),
+            """
+            SELECT COALESCE(
+                (SELECT base_account_id FROM portfolios WHERE profile_id = %s LIMIT 1),
+                (SELECT ext_data->>'base_account_id' FROM cdp_profiles WHERE profile_id = %s LIMIT 1)
+            ) AS base_account_id
+            """,
+            (profile_id, profile_id),
         )
         row = cur.fetchone()
         return row["base_account_id"] if row else None

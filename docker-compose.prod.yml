@@ -1,0 +1,160 @@
+services:
+  api-blue:
+    image: registry.innotech.vn/cdp-ai/c720-data-activation/core:latest
+    container_name: prod_api_blue
+    env_file: .env
+    ports:
+      - "127.0.0.1:8001:8000"
+    restart: unless-stopped
+    depends_on:
+      - redis
+
+  api-green:
+    image: registry.innotech.vn/cdp-ai/c720-data-activation/core:latest
+    container_name: prod_api_green
+    env_file: .env
+    ports:
+      - "127.0.0.1:8002:8000"
+    restart: unless-stopped
+    depends_on:
+      - redis
+
+  redis:
+    image: redis:7-alpine
+    container_name: prod_redis_cache
+    restart: unless-stopped
+
+  ngrok:
+    image: ngrok/ngrok:latest
+    container_name: prod_ngrok_tunnel
+    restart: unless-stopped
+    environment:
+      - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN}
+    # Notice Ngrok now points to your HOST Nginx on port 9090
+    command: "http host.docker.internal:9090 --domain=kirby-nonclarifiable-nonembryonically.ngrok-free.dev"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.0
+    container_name: my_zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    volumes:
+      - zookeeper_data:/var/lib/zookeeper/data
+      - zookeeper_log:/var/lib/zookeeper/log
+    restart: unless-stopped
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    container_name: my_kafka
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    restart: unless-stopped
+
+  init-kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    container_name: prod_init_kafka
+    depends_on:
+      - kafka
+    command: >
+      bash -c "
+        echo 'Waiting for Kafka to be ready...'
+        cub kafka-ready -b kafka:9092 1 40
+        echo 'Creating topics...'
+        kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic cdp.events.raw --replication-factor 1 --partitions 1
+        kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic leo.score.updates --replication-factor 1 --partitions 1
+        kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic leo.ws-forwarder.dlq --replication-factor 1 --partitions 1
+        kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic leo.webhook-forwarder.dlq --replication-factor 1 --partitions 1
+        echo 'Topics created successfully.'
+      "
+
+  cdc-poller:
+    image: registry.innotech.vn/cdp-ai/c720-data-activation/cdc-poller:latest
+    container_name: my_cdc_poller
+    env_file: .env
+    environment:
+      - REDIS_URL=redis://redis:6379/2
+    depends_on:
+      redis:
+        condition: service_started
+      init-kafka:
+        condition: service_completed_successfully # PREVENTS CRASH LOOP
+    restart: unless-stopped
+
+  scoring-consumer:
+    image: registry.innotech.vn/cdp-ai/c720-data-activation/scoring-consumer:latest
+    container_name: my_scoring_consumer
+    env_file: .env
+    environment:
+      - REDIS_URL=redis://redis:6379/2
+    depends_on:
+      redis:
+        condition: service_started
+      init-kafka:
+        condition: service_completed_successfully # PREVENTS CRASH LOOP
+    restart: unless-stopped
+
+  nba-publisher:
+    image: registry.innotech.vn/cdp-ai/c720-data-activation/nba-publisher:latest
+    container_name: my_nba_publisher
+    env_file: .env
+    environment:
+      - REDIS_URL=redis://redis:6379/2
+    depends_on:
+      redis:
+        condition: service_started
+      init-kafka:
+        condition: service_completed_successfully # PREVENTS CRASH LOOP
+    restart: unless-stopped
+
+  ws-forwarder:
+    image: registry.innotech.vn/cdp-ai/c720-data-activation/ws-forwarder:latest
+    container_name: my_ws_forwarder
+    env_file: .env
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - WS_FORWARDER_URL=${WS_FORWARDER_URL:-}
+      - WS_CLIENT_ID=${WS_CLIENT_ID:-cdp_innotech_2026} # ADDED THIS LINE
+      - WS_FORWARDER_INPUT_TOPIC=${WS_FORWARDER_INPUT_TOPIC:-leo.score.updates}
+    depends_on:
+      redis:
+        condition: service_started
+      init-kafka:
+        condition: service_completed_successfully # PREVENTS CRASH LOOP
+    restart: unless-stopped
+
+  webhook-forwarder:
+    image: registry.innotech.vn/cdp-ai/c720-data-activation/webhook-forwarder:latest
+    container_name: my_webhook_forwarder
+    env_file: .env
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - WEBHOOK_FORWARDER_URL=${WEBHOOK_FORWARDER_URL:-http://118.69.83.26:8006/api/v1/webhook/cdp}
+      - WEBHOOK_FORWARDER_INPUT_TOPIC=${WEBHOOK_FORWARDER_INPUT_TOPIC:-leo.score.updates}
+    depends_on:
+      init-kafka:
+        condition: service_completed_successfully # PREVENTS CRASH LOOP
+    restart: unless-stopped
+
+  dashboard:
+    image: registry.innotech.vn/cdp-ai/c720-data-activation/dashboard:latest
+    container_name: my_dashboard
+    ports:
+      - "3000:80"
+    restart: unless-stopped
+
+# Don't forget to declare the volumes at the very bottom of the file!
+volumes:
+  zookeeper_data:
+  zookeeper_log:
+  kafka_data:

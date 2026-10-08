@@ -50,12 +50,25 @@ For every Kafka message the forwarder:
     "base_account_id": "999C000022",
     "ticker": "FPT",
     "metric_name": "ticker-view",
+    "journey_id": "5BtTqEwmZTyUqLfemqGIJ2",
     "event_payload": { ... },
     "updated_at": "2026-04-20T08:30:00Z"
   },
   "sent_at": "2026-04-20T08:30:00.123Z"
 }
 ```
+
+`journey_id` is the `refJourneyId` of the source tracking event, i.e. which webapp the event came from (empty string if the event had none):
+
+| journey_id | Journey |
+|---|---|
+| `id_default_journey` | 1 INVEST JOURNEY MAP |
+| `5BtTqEwmZTyUqLfemqGIJ2` | 1INVEST SOCIAL |
+| `5vh4VvGso7IMlCr0KCqS0m` | 1INVEST MOBILE |
+| `5adVjBJtfDA7NOiRHbzL02` | DEMO & TEST |
+| `uEVDe6ctPxx5hUI0ZMCWC` | UAT 1INVEST |
+
+The same envelope is also POSTed to the HTTP webhook by `services/webhook_forwarder/` (one event per request, offset committed on HTTP 200).
 
 `event_id` format is `<WS_FORWARDER_ENV>-<partition>:<offset>` (e.g. `dev-0:123`). Set `WS_FORWARDER_ENV=prod` in production.
 

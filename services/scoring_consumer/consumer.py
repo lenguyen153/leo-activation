@@ -219,6 +219,7 @@ def main():
                         score_delta=score_delta,
                         updated_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
                         event_data=event.event_data,
+                        journey_id=event.journey_id,
                     )
                     producer.produce(
                         topic=OUTPUT_TOPIC,

@@ -37,6 +37,7 @@ def transform(entry: Dict[str, Any]) -> List[CdpEventMessage]:
     fingerprint_id = data.get("fingerprintId", "")
     metric_name = data.get("metricName", "")
     created_at = data.get("createdAt", "")
+    journey_id = data.get("refJourneyId", "")
     metric_score = get_metric_score(metric_name)
 
     if not fingerprint_id:
@@ -57,6 +58,7 @@ def transform(entry: Dict[str, Any]) -> List[CdpEventMessage]:
                 metric_score=metric_score,
                 created_at=created_at,
                 event_data=event_data,
+                journey_id=journey_id,
             )
         )
 
