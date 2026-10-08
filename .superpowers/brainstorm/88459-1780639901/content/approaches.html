@@ -1,0 +1,79 @@
+<h2>Integration Approaches</h2>
+<p class="subtitle">How the social platform connects to LEO Activation — pick the architecture that fits</p>
+
+<div class="options">
+
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>LEO as Data Provider + Event Gateway <span style="font-size:0.75em;background:#22c55e22;color:#16a34a;padding:2px 8px;border-radius:99px;margin-left:8px;">Recommended</span></h3>
+      <p>LEO exposes a clean read API for the social platform and adds a new <code>/social/events</code> ingestion endpoint. Social behavioral events (posts, reactions, trending tickers) are pushed into LEO's existing Kafka/CDC scoring pipeline. Identity resolved via a new <code>/identity/resolve</code> endpoint (phone/email → profile_id).</p>
+      <div class="pros-cons" style="margin-top:12px">
+        <div class="pros"><h4>Pros</h4><ul>
+          <li>Minimal changes to LEO core</li>
+          <li>Social platform only needs HTTP — no Kafka knowledge</li>
+          <li>New routes are isolated in <code>api/</code></li>
+          <li>Fits the existing REST pattern</li>
+        </ul></div>
+        <div class="cons"><h4>Cons</h4><ul>
+          <li>LEO becomes a dependency — social platform blocked if LEO is down</li>
+          <li>High-volume social events may need rate limiting</li>
+        </ul></div>
+      </div>
+      <div style="margin-top:12px;padding:12px;background:#f8fafc;border-radius:8px;font-family:monospace;font-size:0.8em;line-height:1.6">
+        Social Platform → <strong>POST /social/events</strong> → LEO → Kafka → Scoring Consumer<br>
+        Social Platform ← <strong>GET /recommendation/interested/{ticker}</strong> ← LEO<br>
+        Social Platform ← <strong>GET /identity/resolve?email=…</strong> ← LEO
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Shared Kafka Bus (Event-Driven)</h3>
+      <p>Both systems share a Kafka cluster. Social platform publishes to a <code>social-events</code> topic. LEO's scoring consumer is extended to also consume that topic. LEO publishes interest score updates to a topic the social platform subscribes to. Fully decoupled at runtime.</p>
+      <div class="pros-cons" style="margin-top:12px">
+        <div class="pros"><h4>Pros</h4><ul>
+          <li>Fully decoupled — neither blocks the other</li>
+          <li>Natural fit for high-volume event streams</li>
+          <li>Resilient — events buffer if one side is down</li>
+        </ul></div>
+        <div class="cons"><h4>Cons</h4><ul>
+          <li>Social platform team must learn Kafka</li>
+          <li>More infra to manage (topic ACLs, schemas)</li>
+          <li>Harder to debug event flow across systems</li>
+        </ul></div>
+      </div>
+      <div style="margin-top:12px;padding:12px;background:#f8fafc;border-radius:8px;font-family:monospace;font-size:0.8em;line-height:1.6">
+        Social Platform → <strong>Kafka: social-events</strong> → LEO scoring consumer<br>
+        Social Platform ← <strong>Kafka: interest-scores</strong> ← LEO NBA publisher
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>Integration Gateway / BFF Layer</h3>
+      <p>A thin Backend-for-Frontend service sits between the social platform and LEO. It handles identity resolution, data aggregation (merging LEO scores + social graph), event routing, and caching. Both systems stay completely unaware of each other's internals.</p>
+      <div class="pros-cons" style="margin-top:12px">
+        <div class="pros"><h4>Pros</h4><ul>
+          <li>Cleanest boundary — neither product changes for the other</li>
+          <li>Can version and evolve the integration independently</li>
+          <li>Best for long-term multi-product growth</li>
+        </ul></div>
+        <div class="cons"><h4>Cons</h4><ul>
+          <li>Extra service to build, deploy, and maintain</li>
+          <li>Overkill for two products sharing a team</li>
+          <li>Adds latency and a new failure point</li>
+        </ul></div>
+      </div>
+      <div style="margin-top:12px;padding:12px;background:#f8fafc;border-radius:8px;font-family:monospace;font-size:0.8em;line-height:1.6">
+        Social Platform ↔ <strong>Integration Gateway</strong> ↔ LEO Activation<br>
+        Gateway handles: identity, event routing, score aggregation
+      </div>
+    </div>
+  </div>
+
+</div>

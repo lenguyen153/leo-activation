@@ -1,0 +1,82 @@
+<h2>Where to capture behavioral events?</h2>
+<p class="subtitle">Backend via RabbitMQ vs. Flutter frontend tracking — or both</p>
+
+<div class="options">
+
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>Backend via RabbitMQ consumer <span style="font-size:0.75em;background:#22c55e22;color:#16a34a;padding:2px 8px;border-radius:99px;margin-left:8px;">Recommended</span></h3>
+      <p>Add a RabbitMQ consumer that listens to the existing mutations queue and forwards events to leo-cdp-framework's ingestion API. Zero changes to Flutter. All mutation events (post, like, react, comment, share, bookmark, follow) are already guaranteed to flow through here.</p>
+      <div style="background:#0f172a;border-radius:8px;padding:12px;font-family:monospace;font-size:0.78em;line-height:1.8;color:#e2e8f0;margin:12px 0">
+        Flutter → Social Backend → <span style="color:#f59e0b">RabbitMQ</span><br>
+        &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:#f59e0b">↓ new consumer</span><br>
+        &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:#a78bfa">leo-cdp-framework ingestion API</span><br>
+        &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:#64748b">↓</span><br>
+        &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:#34d399">ArangoDB → LEO Activation</span>
+      </div>
+      <div class="pros-cons">
+        <div class="pros"><h4>Pros</h4><ul>
+          <li>100% reliable — events never missed, no offline risk</li>
+          <li>Structured & validated data (passed backend logic)</li>
+          <li>Zero Flutter changes</li>
+          <li>Single place to maintain event mapping</li>
+          <li>Reuses existing infra you already have</li>
+        </ul></div>
+        <div class="cons"><h4>Cons</h4><ul>
+          <li>Misses passive signals (scroll, view time, tap patterns)</li>
+          <li>Slight async delay (usually fine for scoring)</li>
+        </ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Flutter frontend tracking</h3>
+      <p>Flutter app calls leo-cdp-framework's HTTP ingestion API directly for every user interaction — including passive ones (ticker page views, scroll depth, time-on-discussion).</p>
+      <div style="background:#0f172a;border-radius:8px;padding:12px;font-family:monospace;font-size:0.78em;line-height:1.8;color:#e2e8f0;margin:12px 0">
+        <span style="color:#38bdf8">Flutter</span> → HTTP events → <span style="color:#a78bfa">leo-cdp-framework</span><br>
+        <span style="color:#38bdf8">Flutter</span> → mutation → Social Backend (separately)
+      </div>
+      <div class="pros-cons">
+        <div class="pros"><h4>Pros</h4><ul>
+          <li>Captures passive engagement (views, scroll, time)</li>
+          <li>Richer signal for interest scoring</li>
+          <li>How leo-cdp-framework was originally designed</li>
+        </ul></div>
+        <div class="cons"><h4>Cons</h4><ul>
+          <li>Events lost when offline or app killed</li>
+          <li>Duplication risk for mutations (front + back both track)</li>
+          <li>Flutter tracking SDK maintenance burden</li>
+          <li>Harder to ensure data quality</li>
+        </ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>Hybrid — backend for mutations, Flutter for passive</h3>
+      <p>RabbitMQ consumer handles all writes (post, like, react, comment, share, bookmark, follow). Flutter only tracks passive signals that never hit the backend: ticker page view duration, scroll depth in discussion threads, feed impression events.</p>
+      <div style="background:#0f172a;border-radius:8px;padding:12px;font-family:monospace;font-size:0.78em;line-height:1.8;color:#e2e8f0;margin:12px 0">
+        <span style="color:#f59e0b">RabbitMQ consumer</span> → mutations → <span style="color:#a78bfa">leo-cdp-framework</span><br>
+        <span style="color:#38bdf8">Flutter</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; → views/scroll → <span style="color:#a78bfa">leo-cdp-framework</span>
+      </div>
+      <div class="pros-cons">
+        <div class="pros"><h4>Pros</h4><ul>
+          <li>Reliable mutations + rich passive signals</li>
+          <li>No duplication — clear ownership per event type</li>
+          <li>Best data quality for scoring</li>
+        </ul></div>
+        <div class="cons"><h4>Cons</h4><ul>
+          <li>Two tracking surfaces to maintain</li>
+          <li>More complex to implement upfront</li>
+        </ul></div>
+      </div>
+    </div>
+  </div>
+
+</div>

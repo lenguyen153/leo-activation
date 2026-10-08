@@ -1,0 +1,99 @@
+<h2>Final Design — Social Platform + LEO Activation</h2>
+<p class="subtitle">Complete picture. Approve each section before we write the spec.</p>
+
+<div class="section">
+  <div class="label">Complete Data Flow</div>
+  <div style="background:#0f172a;border-radius:12px;padding:24px;font-family:monospace;font-size:0.82em;line-height:2.2;color:#e2e8f0">
+    <span style="color:#94a3b8">── WRITE: behavioral events ──────────────────────────────────────────</span><br>
+    <span style="color:#38bdf8">Flutter App</span>
+    <span style="color:#64748b"> → </span>
+    <span style="color:#fbbf24">leo-cdp-framework SDK</span>
+    <span style="color:#64748b"> (offline-safe, auto-retry) → </span>
+    <span style="color:#fb923c">ArangoDB</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:#64748b">↓ CDC poller (existing)</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:#34d399">LEO Activation</span>
+    <span style="color:#64748b"> → Kafka → Scoring Consumer* → PG</span><br><br>
+    <span style="color:#94a3b8">── READ: recommendations ─────────────────────────────────────────────</span><br>
+    <span style="color:#60a5fa">Social Backend</span>
+    <span style="color:#64748b"> ← REST ← </span>
+    <span style="color:#34d399">LEO Activation</span>
+    <span style="color:#64748b"> (interest scores, profile affinity, NBA, trending tickers*)</span><br><br>
+    <span style="color:#94a3b8">── IDENTITY: federated lookup ────────────────────────────────────────</span><br>
+    <span style="color:#60a5fa">Social Backend</span>
+    <span style="color:#64748b"> → phone/email → </span>
+    <span style="color:#34d399">GET /identity/resolve*</span>
+    <span style="color:#64748b"> → profile_id</span><br><br>
+    <span style="color:#475569;font-size:0.9em">* = new additions to LEO Activation</span>
+  </div>
+</div>
+
+<div class="section">
+  <div class="label">New event types — tracked by Flutter SDK</div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+    <div style="background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:14px">
+      <h4 style="margin:0 0 8px;color:#15803d">High Signal (explicit intent)</h4>
+      <ul style="margin:0;font-size:0.85em;font-family:monospace;color:#374151">
+        <li><code>social_post</code> — posts about a ticker</li>
+        <li><code>ticker_follow</code> — follows a ticker's thread</li>
+        <li><code>ticker_reaction</code> — bullish / bearish / like</li>
+        <li><code>social_share</code> — shares a ticker post</li>
+        <li><code>social_bookmark</code> — bookmarks a post</li>
+        <li><code>discussion_comment</code> — comments in thread</li>
+      </ul>
+    </div>
+    <div style="background:#eff6ff;border:1px solid #93c5fd;border-radius:8px;padding:14px">
+      <h4 style="margin:0 0 8px;color:#1d4ed8">Low Signal (passive engagement)</h4>
+      <ul style="margin:0;font-size:0.85em;font-family:monospace;color:#374151">
+        <li><code>ticker_page_view</code> — {ticker, duration_ms}</li>
+        <li><code>social_feed_view</code> — {ticker, duration_ms, position}</li>
+        <li><code>discussion_view</code> — {ticker, thread_id, duration_ms}</li>
+      </ul>
+      <p style="margin:8px 0 0;font-size:0.8em;color:#64748b">Lower weight in scoring — presence alone is weak signal; duration makes it meaningful</p>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="label">Changes to LEO Activation (scoped)</div>
+  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
+
+    <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:14px">
+      <div class="label">services/scoring_consumer/</div>
+      <p style="font-size:0.85em;color:#374151;margin:8px 0">Add weight mappings for the 9 new social event types. High-signal events score higher. Duration-based events scale weight by <code>min(duration_ms, 30000)</code>.</p>
+      <div style="font-size:0.78em;font-family:monospace;color:#64748b">Existing file, new elif branches</div>
+    </div>
+
+    <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:14px">
+      <div class="label">api/identity.py (new)</div>
+      <p style="font-size:0.85em;color:#374151;margin:8px 0">Single endpoint: lookup <code>profile_id</code> by phone or email from PG. Used once at social login to link the two systems.</p>
+      <div style="font-size:0.78em;font-family:monospace;color:#64748b">GET /identity/resolve?email= | ?phone=</div>
+    </div>
+
+    <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:14px">
+      <div class="label">api/social.py (new)</div>
+      <p style="font-size:0.85em;color:#374151;margin:8px 0">Trending tickers endpoint: aggregates social event counts from PG scoring tables, returns ranked ticker list for the social feed's "Hot Discussions" section.</p>
+      <div style="font-size:0.78em;font-family:monospace;color:#64748b">GET /social/trending-tickers</div>
+    </div>
+
+  </div>
+</div>
+
+<div class="section">
+  <div class="label">What LEO Activation does NOT change</div>
+  <div style="background:#fefce8;border:1px solid #fde047;border-radius:8px;padding:14px;font-size:0.88em;color:#374151">
+    CDC poller, ArangoDB sync, Kafka pipeline, NBA/NLA engines, campaign engine, dashboard — all untouched.<br>
+    Existing <code>/recommendation/*</code> endpoints consumed as-is by the social backend.
+  </div>
+</div>
+
+<div class="section">
+  <div class="label">What the social platform owns entirely</div>
+  <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:14px;font-size:0.88em;color:#374151;line-height:1.8">
+    <strong>Flutter App</strong> — UI, feed, discussion threads, posting, reactions, leo-cdp-framework SDK integration<br>
+    <strong>Social Backend</strong> — post/comment/reaction CRUD, follow graph, feed ranking, push notifications, RabbitMQ async writes<br>
+    <strong>Social DB</strong> — posts, comments, reactions, follows, bookmarks, shares<br>
+    <strong>Identity store</strong> — maps social user ID ↔ profile_id (looked up once via <code>/identity/resolve</code>, cached locally)
+  </div>
+</div>
+
+<p style="text-align:center;margin-top:20px;color:#64748b;font-size:0.9em">Does this final design look right? Approve and I'll write the spec doc.</p>

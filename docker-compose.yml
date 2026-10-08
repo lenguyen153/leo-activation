@@ -115,6 +115,7 @@ services:
         kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic cdp.events.raw --replication-factor 1 --partitions 1
         kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic leo.score.updates --replication-factor 1 --partitions 1
         kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic leo.ws-forwarder.dlq --replication-factor 1 --partitions 1
+        kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic leo.webhook-forwarder.dlq --replication-factor 1 --partitions 1
         echo 'Topics created successfully.'
       "
     
@@ -197,6 +198,21 @@ services:
     depends_on:
       redis:
         condition: service_started
+      init-kafka:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  webhook-forwarder:
+    build:
+      context: .
+      dockerfile: services/webhook_forwarder/Dockerfile
+    container_name: my_webhook_forwarder
+    env_file: .env
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - WEBHOOK_FORWARDER_URL=${WEBHOOK_FORWARDER_URL:-http://118.69.83.26:8006/api/v1/webhook/cdp}
+      - WEBHOOK_FORWARDER_INPUT_TOPIC=${WEBHOOK_FORWARDER_INPUT_TOPIC:-leo.score.updates}
+    depends_on:
       init-kafka:
         condition: service_completed_successfully
     restart: unless-stopped
